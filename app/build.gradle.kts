@@ -23,7 +23,7 @@ android {
                 storeFile = file(yol)
                 storeType = "pkcs12"
                 storePassword = System.getenv("KS_PASS")
-                keyAlias = "cizgi"
+                keyAlias = "subplay"
                 keyPassword = System.getenv("KS_PASS")
             }
         }
