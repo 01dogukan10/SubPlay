@@ -129,6 +129,78 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     fun downloadSearchResult(r: SearchResult) = enqueueYt(r.url, null, null, null, r.title)
 
+    /**
+     * Toplu ekleme: her satır bir şarkı ("Sanatçı - Şarkı" ya da sadece ad).
+     * Numaralar/madde işaretleri temizlenir, Exportify CSV'si de okunur.
+     * Daha önce aynı aramayla indirilenler atlanır. Eklenen şarkı sayısını döndürür.
+     */
+    fun bulkImport(text: String, playlistName: String?): Int {
+        val items = parseSongList(text)
+        if (items.isEmpty()) return 0
+        val already = _tracks.value.map { it.sourceUrl }.toSet()
+        val plId = playlistName?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
+            _playlists.value.find { it.name.equals(name, ignoreCase = true) }?.id ?: createPlaylist(name)
+        }
+        var count = 0
+        for ((artist, title) in items) {
+            val label = if (artist.isBlank()) title else "$artist - $title"
+            val query = "ytsearch1:$label audio"
+            if (query in already) {
+                // Zaten indirilmiş: sadece listeye ekle
+                if (plId != null) _tracks.value.find { it.sourceUrl == query }?.let { addToPlaylist(plId, it.id) }
+                continue
+            }
+            enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label)
+            count++
+        }
+        return count
+    }
+
+    private fun parseSongList(text: String): List<Pair<String, String>> {
+        val lines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        if (lines.isEmpty()) return emptyList()
+
+        // Exportify / Spotify CSV
+        val header = splitCsv(lines.first()).map { it.lowercase() }
+        val ti = header.indexOfFirst { it == "track name" || it == "title" || it == "şarkı" }
+        val ai = header.indexOfFirst { it.startsWith("artist name") || it == "artist" || it == "sanatçı" }
+        if (ti >= 0 && lines.first().contains(',')) {
+            return lines.drop(1).mapNotNull { l ->
+                val cols = splitCsv(l)
+                val t = cols.getOrNull(ti)?.trim().orEmpty()
+                if (t.isEmpty()) null
+                else (cols.getOrNull(ai)?.substringBefore(';')?.substringBefore(',')?.trim().orEmpty()) to t
+            }.distinct()
+        }
+
+        val junk = Regex("^(\\d+[.)\\-:]\\s*|[-*•·▶►]+\\s*)")
+        return lines.map { l ->
+            val clean = l.replace(junk, "").trim()
+            val sep = listOf(" - ", " – ", " — ", " by ").firstOrNull { clean.contains(it) }
+            if (sep == null) "" to clean
+            else clean.substringBefore(sep).trim() to clean.substringAfter(sep).trim()
+        }.filter { it.second.isNotEmpty() }.distinct()
+    }
+
+    private fun splitCsv(line: String): List<String> {
+        val out = mutableListOf<String>()
+        val cur = StringBuilder()
+        var q = false
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
+            when {
+                ch == '"' && q && i + 1 < line.length && line[i + 1] == '"' -> { cur.append('"'); i++ }
+                ch == '"' -> q = !q
+                ch == ',' && !q -> { out += cur.toString(); cur.clear() }
+                else -> cur.append(ch)
+            }
+            i++
+        }
+        out += cur.toString()
+        return out
+    }
+
     private fun isYouTube(u: String) = u.contains("youtube.com/") || u.contains("youtu.be/")
     private fun isYtPlaylist(u: String) = u.contains("/playlist") && u.contains("list=")
     private fun isSpotify(u: String) = u.contains("spotify.com/") || u.contains("spotify.link/")

@@ -19,6 +19,7 @@ import com.dogukan.muzik.ui.TemaDeposu
 class MainActivity : ComponentActivity() {
 
     private val sharedUrl = mutableStateOf<String?>(null)
+    private val sharedList = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -40,6 +41,8 @@ class MainActivity : ComponentActivity() {
                     vm = vm,
                     sharedUrl = sharedUrl.value,
                     onSharedConsumed = { sharedUrl.value = null },
+                    sharedList = sharedList.value,
+                    onSharedListConsumed = { sharedList.value = null },
                     tema = tema,
                     onTema = temaDeposu::kaydet,
                 )
@@ -56,6 +59,10 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(i: Intent?) {
         if (i?.action != Intent.ACTION_SEND) return
         val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        Regex("https?://\\S+").find(text)?.let { sharedUrl.value = it.value }
+        val url = Regex("https?://\\S+").find(text)?.value
+        when {
+            url != null -> sharedUrl.value = url
+            text.lines().count { it.isNotBlank() } >= 2 -> sharedList.value = text // not uygulamasından liste
+        }
     }
 }

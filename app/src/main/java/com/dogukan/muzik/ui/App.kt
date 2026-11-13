@@ -1,6 +1,8 @@
 package com.dogukan.muzik.ui
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -93,6 +95,8 @@ fun App(
     vm: MainViewModel,
     sharedUrl: String?,
     onSharedConsumed: () -> Unit,
+    sharedList: String?,
+    onSharedListConsumed: () -> Unit,
     tema: TemaAyar,
     onTema: (TemaAyar) -> Unit,
 ) {
@@ -112,6 +116,8 @@ fun App(
     var showAdd by remember { mutableStateOf(false) }
     var addInitial by remember { mutableStateOf("") }
     var showToken by remember { mutableStateOf(false) }
+    var showBulk by remember { mutableStateOf(false) }
+    var bulkInitial by remember { mutableStateOf("") }
     var pickPlaylistFor by remember { mutableStateOf<Track?>(null) }
     var confirmDelete by remember { mutableStateOf<Track?>(null) }
     var editTrack by remember { mutableStateOf<Track?>(null) }
@@ -125,6 +131,15 @@ fun App(
             showAdd = true
             tab = 0
             onSharedConsumed()
+        }
+    }
+
+    LaunchedEffect(sharedList) {
+        if (sharedList != null) {
+            bulkInitial = sharedList
+            showBulk = true
+            tab = 0
+            onSharedListConsumed()
         }
     }
 
@@ -229,6 +244,19 @@ fun App(
             onAdd = { url, title -> vm.repo.startDownload(url, title); showAdd = false },
             onSearch = vm.repo::search,
             onPick = { vm.repo.downloadSearchResult(it); showAdd = false },
+            onBulk = { showAdd = false; bulkInitial = ""; showBulk = true },
+        )
+    }
+
+    if (showBulk) {
+        BulkDialog(
+            initial = bulkInitial,
+            onDismiss = { showBulk = false },
+            onImport = { text, name ->
+                val n = vm.repo.bulkImport(text, name)
+                showBulk = false
+                toast(if (n > 0) "$n şarkı aranıp indiriliyor" else "Yeni şarkı yok (hepsi zaten kütüphanede)")
+            },
         )
     }
 
@@ -592,6 +620,7 @@ private fun AddDialog(
     onAdd: (String, String?) -> Unit,
     onSearch: suspend (String) -> List<SearchResult>,
     onPick: (SearchResult) -> Unit,
+    onBulk: () -> Unit,
 ) {
     var text by remember { mutableStateOf(initial) }
     var title by remember { mutableStateOf("") }
@@ -631,6 +660,12 @@ private fun AddDialog(
                     OutlinedTextField(title, { title = it }, label = { Text("Ad (isteğe bağlı)") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth())
                 }
+                if (results.isEmpty() && !searching) {
+                    TextButton(onClick = onBulk) {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null); Spacer(Modifier.width(6.dp))
+                        Text("Elimde liste var, toplu ekle")
+                    }
+                }
                 if (searching) LinearProgressIndicator(Modifier.fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (results.isNotEmpty()) {
@@ -658,6 +693,60 @@ private fun AddDialog(
                 TextButton(onClick = { onAdd(input, title.ifBlank { null }) }) { Text("İndir") }
             } else {
                 TextButton(enabled = input.isNotEmpty() && !searching, onClick = { doSearch() }) { Text("Ara") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
+    )
+}
+
+@Composable
+private fun BulkDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onImport: (String, String?) -> Unit,
+) {
+    val ctx = LocalContext.current
+    var text by remember { mutableStateOf(initial) }
+    var listName by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()?.let { text = it }
+            if (listName.isBlank()) {
+                uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.')?.let { listName = it }
+            }
+        }
+    }
+    val count = remember(text) { text.lines().count { it.isNotBlank() } }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Toplu ekle") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Her satıra bir şarkı yaz. \"Sanatçı - Şarkı\" şeklinde yazarsan daha doğru bulunur.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    text, { text = it },
+                    placeholder = { Text("Tarkan - Şımarık\nSezen Aksu - Firuze\n…") },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp, max = 280.dp),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { picker.launch(arrayOf("text/*", "application/csv", "text/csv")) }) {
+                        Text("Dosyadan aç (.txt / .csv)")
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text("$count satır", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                OutlinedTextField(listName, { listName = it }, label = { Text("Çalma listesi adı (isteğe bağlı)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = count > 0, onClick = { onImport(text, listName.ifBlank { null }) }) {
+                Text("Hepsini indir")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
