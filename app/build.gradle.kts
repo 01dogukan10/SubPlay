@@ -15,6 +15,7 @@ android {
         val yapi = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionCode = 100 + yapi
         versionName = "1.0.$yapi"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
     signingConfigs {
         create("sabit") {
@@ -40,6 +41,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    packaging { jniLibs.useLegacyPackaging = true } // yt-dlp/python için gerekli
 }
 
 dependencies {
@@ -56,4 +58,5 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.google.guava:guava:33.3.1-android")
+    implementation("io.github.junkfood02.youtubedl-android:library:0.17.4")
 }

@@ -9,6 +9,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -28,6 +35,14 @@ data class Track(
 )
 
 data class Playlist(val id: String, val name: String, val trackIds: List<String>)
+
+data class SearchResult(
+    val id: String,
+    val title: String,
+    val channel: String,
+    val duration: Long,
+    val url: String,
+)
 
 /** progress == null -> boyut bilinmiyor (belirsiz çubuk). error != null -> başarısız. */
 data class DownloadTask(
@@ -70,18 +85,253 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     // ---------------- İndirme ----------------
 
-    fun startDownload(url: String, customTitle: String?) {
+    /** Link türüne göre yönlendir: YouTube, Spotify ya da doğrudan dosya. */
+    fun startDownload(input: String, customTitle: String?) {
+        val url = input.trim()
+        when {
+            isYouTube(url) && isYtPlaylist(url) -> expandYtPlaylist(url)
+            isYouTube(url) -> enqueueYt(url, customTitle, null, null, url)
+            isSpotify(url) -> expandSpotify(url)
+            else -> startDirect(url, customTitle)
+        }
+    }
+
+    fun downloadSearchResult(r: SearchResult) = enqueueYt(r.url, null, null, null, r.title)
+
+    private fun isYouTube(u: String) = u.contains("youtube.com/") || u.contains("youtu.be/")
+    private fun isYtPlaylist(u: String) = u.contains("/playlist") && u.contains("list=")
+    private fun isSpotify(u: String) = u.contains("spotify.com/") || u.contains("spotify.link/")
+
+    private fun newTask(url: String, name: String): String {
         val id = UUID.randomUUID().toString()
-        val task = DownloadTask(id, url.trim(), url.trim().substringAfterLast('/').take(60))
-        synchronized(lock) { _downloads.value = _downloads.value + task }
+        synchronized(lock) { _downloads.value = _downloads.value + DownloadTask(id, url, name.take(80)) }
+        return id
+    }
+
+    private fun removeTask(id: String) = synchronized(lock) {
+        _downloads.value = _downloads.value.filterNot { it.id == id }
+    }
+
+    private fun friendly(e: Throwable): String {
+        val msg = e.message ?: return "Bilinmeyen hata"
+        val line = msg.lines().map { it.trim() }.lastOrNull { it.isNotEmpty() } ?: msg
+        return line.removePrefix("ERROR: ").take(200)
+    }
+
+    private fun startDirect(url: String, customTitle: String?) {
+        val id = newTask(url, url.substringAfterLast('/'))
         scope.launch {
             try {
-                download(id, url.trim(), customTitle)
-                synchronized(lock) { _downloads.value = _downloads.value.filterNot { it.id == id } }
+                download(id, url, customTitle)
+                removeTask(id)
             } catch (e: Exception) {
-                updateTask(id) { it.copy(error = e.message ?: "Bilinmeyen hata") }
+                updateTask(id) { it.copy(error = friendly(e)) }
             }
         }
+    }
+
+    // ---------------- YouTube (yt-dlp) ----------------
+
+    private val prefs = ctx.getSharedPreferences("ayarlar", Context.MODE_PRIVATE)
+    private val ytMutex = Mutex()
+    private var ytReady = false
+    private val ytSlots = Semaphore(2) // aynı anda en fazla 2 indirme
+
+    private suspend fun ensureYt() = ytMutex.withLock {
+        if (ytReady) return@withLock
+        YoutubeDL.getInstance().init(ctx)
+        ytReady = true
+        // YouTube sık değiştiği için yt-dlp'yi günde bir kez kendiliğinden güncelle
+        val last = prefs.getLong("ytdlp_guncelleme", 0L)
+        if (System.currentTimeMillis() - last > 24 * 3600_000L) {
+            runCatching { YoutubeDL.getInstance().updateYoutubeDL(ctx) }
+                .onSuccess { prefs.edit().putLong("ytdlp_guncelleme", System.currentTimeMillis()).apply() }
+        }
+    }
+
+    suspend fun updateYtDlp(): String = withContext(Dispatchers.IO) {
+        try {
+            ensureYt()
+            val status = YoutubeDL.getInstance().updateYoutubeDL(ctx)
+            prefs.edit().putLong("ytdlp_guncelleme", System.currentTimeMillis()).apply()
+            when (status?.name) {
+                "ALREADY_UP_TO_DATE" -> "İndirici zaten güncel"
+                else -> "İndirici güncellendi"
+            }
+        } catch (e: Exception) {
+            "Güncellenemedi: ${friendly(e)}"
+        }
+    }
+
+    suspend fun search(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        ensureYt()
+        val req = YoutubeDLRequest("ytsearch10:$query").apply {
+            addOption("--flat-playlist")
+            addOption("-J")
+        }
+        val out = YoutubeDL.getInstance().execute(req).out
+        val root = JSONObject(out.substring(out.indexOf('{')))
+        val entries = root.optJSONArray("entries") ?: JSONArray()
+        (0 until entries.length()).mapNotNull { i ->
+            val e = entries.optJSONObject(i) ?: return@mapNotNull null
+            val vid = e.optString("id").ifBlank { return@mapNotNull null }
+            SearchResult(
+                id = vid,
+                title = e.optString("title"),
+                channel = e.optString("channel").ifBlank { e.optString("uploader") },
+                duration = e.optDouble("duration", 0.0).toLong(),
+                url = "https://www.youtube.com/watch?v=$vid",
+            )
+        }
+    }
+
+    private fun enqueueYt(source: String, title: String?, artist: String?, playlistId: String?, label: String) {
+        val id = newTask(source, label)
+        scope.launch {
+            try {
+                ytSlots.withPermit {
+                    ensureYt()
+                    val t = ytDownload(id, source, title, artist)
+                    if (playlistId != null) addToPlaylist(playlistId, t.id)
+                }
+                removeTask(id)
+            } catch (e: Exception) {
+                updateTask(id) { it.copy(error = friendly(e)) }
+            }
+        }
+    }
+
+    private fun ytDownload(taskId: String, source: String, title: String?, artist: String?): Track {
+        val tmp = File(ctx.cacheDir, "yt_$taskId").apply { mkdirs() }
+        try {
+            val req = YoutubeDLRequest(source).apply {
+                addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                addOption("--no-playlist")
+                addOption("--no-mtime")
+                addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
+                addOption("--print", "after_move:%(title)s\t%(uploader)s")
+                addOption("--no-simulate")
+            }
+            val resp = YoutubeDL.getInstance().execute(req, taskId) { p, _, _ ->
+                if (p >= 0f) updateTask(taskId) { it.copy(progress = (p / 100f).coerceIn(0f, 1f)) }
+            }
+            val f = tmp.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
+                ?: throw IOException("Ses dosyası inmedi")
+
+            val info = resp.out.lines().lastOrNull { it.contains('\t') }
+            val ytTitle = info?.substringBefore('\t')?.takeIf { it.isNotBlank() && it != "NA" }
+            val ytUploader = info?.substringAfter('\t')?.removeSuffix(" - Topic")?.takeIf { it.isNotBlank() && it != "NA" }
+
+            val finalTitle = title?.takeIf { it.isNotBlank() } ?: ytTitle ?: "Şarkı"
+            val target = uniqueFile(sanitize(finalTitle).ifBlank { "sarki" }, f.extension.ifBlank { "m4a" })
+            f.copyTo(target)
+            val track = Track(
+                id = UUID.randomUUID().toString(),
+                title = finalTitle,
+                artist = artist?.takeIf { it.isNotBlank() } ?: ytUploader.orEmpty(),
+                fileName = target.name,
+                sourceUrl = source,
+                addedAt = System.currentTimeMillis(),
+            )
+            addTrack(track)
+            return track
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    private fun expandYtPlaylist(url: String) {
+        val id = newTask(url, "YouTube listesi okunuyor…")
+        scope.launch {
+            try {
+                ensureYt()
+                val req = YoutubeDLRequest(url).apply { addOption("--flat-playlist"); addOption("-J") }
+                val out = YoutubeDL.getInstance().execute(req).out
+                val root = JSONObject(out.substring(out.indexOf('{')))
+                val entries = root.optJSONArray("entries") ?: JSONArray()
+                if (entries.length() == 0) throw IOException("Listede şarkı bulunamadı")
+                val plId = createPlaylist(root.optString("title").ifBlank { "YouTube listesi" })
+                for (i in 0 until entries.length()) {
+                    val e = entries.optJSONObject(i) ?: continue
+                    val vid = e.optString("id")
+                    if (vid.isBlank()) continue
+                    enqueueYt("https://www.youtube.com/watch?v=$vid", null, null, plId, e.optString("title").ifBlank { vid })
+                }
+                removeTask(id)
+            } catch (e: Exception) {
+                updateTask(id) { it.copy(error = friendly(e)) }
+            }
+        }
+    }
+
+    // ---------------- Spotify ----------------
+
+    private fun expandSpotify(url: String) {
+        val id = newTask(url, "Spotify okunuyor…")
+        scope.launch {
+            try {
+                val (name, items) = resolveSpotify(url)
+                if (items.isEmpty()) throw IOException("Spotify'da şarkı bulunamadı")
+                val plId = if (items.size > 1) createPlaylist(name.ifBlank { "Spotify listesi" }) else null
+                items.forEach { (title, artist) ->
+                    val label = if (artist.isBlank()) title else "$artist - $title"
+                    enqueueYt("ytsearch1:$label audio", title, artist, plId, label)
+                }
+                removeTask(id)
+            } catch (e: Exception) {
+                updateTask(id) { it.copy(error = friendly(e)) }
+            }
+        }
+    }
+
+    private fun httpGet(url: String): Pair<String, String> {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+            setRequestProperty("Accept-Language", "tr,en;q=0.8")
+        }
+        try {
+            if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")
+            return conn.url.toString() to conn.inputStream.bufferedReader().readText()
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Spotify'ın gömme sayfasından ad + sanatçı listesini okur (hesap/anahtar gerekmez). */
+    private fun resolveSpotify(input: String): Pair<String, List<Pair<String, String>>> {
+        val pattern = Regex("open\\.spotify\\.com/(?:intl-[a-zA-Z-]+/)?(track|album|playlist)/([A-Za-z0-9]+)")
+        var m = pattern.find(input)
+        if (m == null) {
+            // spotify.link kısa linki -> asıl adrese git
+            val (finalUrl, body) = httpGet(input)
+            m = pattern.find(finalUrl) ?: pattern.find(body)
+        }
+        m ?: throw IOException("Spotify linki anlaşılamadı (şarkı, albüm veya çalma listesi linki olmalı)")
+        val (type, sid) = m.destructured
+
+        val (_, html) = httpGet("https://open.spotify.com/embed/$type/$sid")
+        val json = Regex("<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", RegexOption.DOT_MATCHES_ALL)
+            .find(html)?.groupValues?.get(1) ?: throw IOException("Spotify bilgisi okunamadı")
+        val entity = JSONObject(json).optJSONObject("props")?.optJSONObject("pageProps")
+            ?.optJSONObject("state")?.optJSONObject("data")?.optJSONObject("entity")
+            ?: throw IOException("Spotify bilgisi okunamadı")
+
+        val name = entity.optString("name").ifBlank { entity.optString("title") }
+        val list = entity.optJSONArray("trackList")
+        if (type != "track" && list != null) {
+            val items = (0 until list.length()).mapNotNull { i ->
+                val t = list.optJSONObject(i) ?: return@mapNotNull null
+                val title = t.optString("title").ifBlank { return@mapNotNull null }
+                title to t.optString("subtitle").replace('\u00a0', ' ')
+            }
+            return name to items
+        }
+        val artists = entity.optJSONArray("artists")?.let { a ->
+            (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") }.joinToString(", ")
+        }.orEmpty().ifBlank { entity.optString("subtitle") }
+        return name to listOf(name to artists)
     }
 
     fun dismissDownload(id: String) = synchronized(lock) {
@@ -170,10 +420,12 @@ class MusicRepository private constructor(private val ctx: Context) {
             sourceUrl = rawUrl,
             addedAt = System.currentTimeMillis(),
         )
-        synchronized(lock) {
-            _tracks.value = listOf(track) + _tracks.value
-            saveTracks()
-        }
+        addTrack(track)
+    }
+
+    private fun addTrack(track: Track) = synchronized(lock) {
+        _tracks.value = listOf(track) + _tracks.value
+        saveTracks()
     }
 
     private fun fileNameFrom(conn: HttpURLConnection, url: URL): String {

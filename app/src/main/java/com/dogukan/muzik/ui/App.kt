@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import android.widget.Toast
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -35,6 +37,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -61,10 +64,12 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -74,7 +79,9 @@ import com.dogukan.muzik.MainViewModel
 import com.dogukan.muzik.PlayerUi
 import com.dogukan.muzik.data.DownloadTask
 import com.dogukan.muzik.data.Playlist
+import com.dogukan.muzik.data.SearchResult
 import com.dogukan.muzik.data.Track
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 private val TR = Locale("tr")
@@ -143,6 +150,7 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
                     tracks, downloads, player.currentId,
                     onPlay = { list, i -> vm.playTracks(list, i) },
                     onDismissDownload = vm.repo::dismissDownload,
+                    onUpdateDownloader = vm.repo::updateYtDlp,
                     menu = trackMenu,
                 )
                 openPl != null -> PlaylistDetail(
@@ -162,10 +170,12 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
     }
 
     if (showAdd) {
-        AddLinkDialog(
+        AddDialog(
             initial = addInitial,
             onDismiss = { showAdd = false },
             onAdd = { url, title -> vm.repo.startDownload(url, title); showAdd = false },
+            onSearch = vm.repo::search,
+            onPick = { vm.repo.downloadSearchResult(it); showAdd = false },
         )
     }
 
@@ -220,9 +230,14 @@ private fun LibraryScreen(
     currentId: String?,
     onPlay: (List<Track>, Int) -> Unit,
     onDismissDownload: (String) -> Unit,
+    onUpdateDownloader: suspend () -> String,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var menuOpen by remember { mutableStateOf(false) }
+    var updating by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val filtered = remember(tracks, query) {
         val q = query.trim().lowercase(TR)
         if (q.isEmpty()) tracks
@@ -230,6 +245,8 @@ private fun LibraryScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = query, onValueChange = { query = it },
             placeholder = { Text("Kütüphanede ara") },
@@ -238,14 +255,36 @@ private fun LibraryScreen(
                 if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Temizle") }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            modifier = Modifier.weight(1f),
         )
+        Box {
+            if (updating) {
+                CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp))
+            } else {
+                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Menü") }
+            }
+            DropdownMenu(menuOpen, { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("İndiriciyi güncelle") },
+                    onClick = {
+                        menuOpen = false
+                        updating = true
+                        scope.launch {
+                            val msg = onUpdateDownloader()
+                            updating = false
+                            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
+            }
+        }
+        }
         LazyColumn(Modifier.fillMaxSize()) {
             items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload) }
             if (filtered.isEmpty() && downloads.isEmpty()) {
                 item {
                     Text(
-                        if (tracks.isEmpty()) "Henüz şarkı yok.\n+ tuşuna basıp bir ses dosyası linki yapıştır ya da tarayıcıdan \"Paylaş → Müzik\" de."
+                        if (tracks.isEmpty()) "Henüz şarkı yok.\n+ tuşuna basıp şarkı adı ara ya da YouTube/Spotify linki yapıştır. YouTube veya Spotify'da \"Paylaş → Müzik\" de olur."
                         else "Sonuç bulunamadı.",
                         modifier = Modifier.padding(24.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -407,21 +446,76 @@ private fun PlaylistDetail(
 // ---------------- Diyaloglar ----------------
 
 @Composable
-private fun AddLinkDialog(initial: String, onDismiss: () -> Unit, onAdd: (String, String?) -> Unit) {
-    var url by remember { mutableStateOf(initial) }
+private fun AddDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onAdd: (String, String?) -> Unit,
+    onSearch: suspend (String) -> List<SearchResult>,
+    onPick: (SearchResult) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
     var title by remember { mutableStateOf("") }
-    val valid = url.trim().let { it.startsWith("http://") || it.startsWith("https://") }
+    var searching by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    val input = text.trim()
+    val isLink = input.startsWith("http://") || input.startsWith("https://")
+
+    fun doSearch() {
+        searching = true; error = null
+        scope.launch {
+            try {
+                results = onSearch(input)
+                if (results.isEmpty()) error = "Sonuç bulunamadı"
+            } catch (e: Exception) {
+                error = "Arama başarısız: ${e.message?.lines()?.lastOrNull { it.isNotBlank() } ?: ""}"
+            }
+            searching = false
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Link ile şarkı ekle") },
+        title = { Text("Şarkı ekle") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(url, { url = it }, label = { Text("Ses dosyası linki (.mp3, .m4a...)") },
-                    singleLine = true, isError = url.isNotBlank() && !valid)
-                OutlinedTextField(title, { title = it }, label = { Text("Ad (isteğe bağlı)") }, singleLine = true)
+                OutlinedTextField(
+                    text, { text = it; results = emptyList(); error = null },
+                    label = { Text("Şarkı adı ya da YouTube / Spotify linki") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (isLink && !input.contains("spotify")) {
+                    OutlinedTextField(title, { title = it }, label = { Text("Ad (isteğe bağlı)") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth())
+                }
+                if (searching) LinearProgressIndicator(Modifier.fillMaxWidth())
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                if (results.isNotEmpty()) {
+                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                        items(results, key = { it.id }) { r ->
+                            ListItem(
+                                modifier = Modifier.clickable { onPick(r) },
+                                headlineContent = { Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                supportingContent = {
+                                    Text(listOf(r.channel, if (r.duration > 0) fmt(r.duration * 1000) else "")
+                                        .filter { it.isNotBlank() }.joinToString(" · "), maxLines = 1)
+                                },
+                            )
+                        }
+                    }
+                }
             }
         },
-        confirmButton = { TextButton(enabled = valid, onClick = { onAdd(url.trim(), title.ifBlank { null }) }) { Text("İndir") } },
+        confirmButton = {
+            if (isLink) {
+                TextButton(onClick = { onAdd(input, title.ifBlank { null }) }) { Text("İndir") }
+            } else {
+                TextButton(enabled = input.isNotEmpty() && !searching, onClick = { doSearch() }) { Text("Ara") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
     )
 }
