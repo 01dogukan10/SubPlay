@@ -9,7 +9,4 @@ Linkten şarkı indirip çevrimdışı dinleme uygulaması (Kotlin + Jetpack Com
 - Arka planda çalma, bildirim + kilit ekranı kontrolleri, kulaklık çıkınca durma
 - Çalma listeleri, karışık çalma, tekrar modu
 
-## Derleme
-Repo'ya push et → GitHub **Actions → APK Derle** → `muzik-apk` artifact'ını indir.
-
-Not: Link doğrudan dosyaya gitmeli. YouTube/Spotify gibi sayfa linkleri çalışmaz.
+Not: /Spotif linkleri çalışmaz.
