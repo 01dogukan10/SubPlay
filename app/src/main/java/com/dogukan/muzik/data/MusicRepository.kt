@@ -32,6 +32,7 @@ data class Track(
     val fileName: String,
     val sourceUrl: String,
     val addedAt: Long,
+    val cover: String? = null, // covers/ klasöründeki dosya adı
 )
 
 data class Playlist(val id: String, val name: String, val trackIds: List<String>)
@@ -67,6 +68,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         (ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: File(ctx.filesDir, "music"))
             .apply { mkdirs() }
 
+    val coversDir: File = File(ctx.filesDir, "covers").apply { mkdirs() }
     private val libFile = File(ctx.filesDir, "library.json")
     private val plFile = File(ctx.filesDir, "playlists.json")
     private val lock = Any()
@@ -82,6 +84,35 @@ class MusicRepository private constructor(private val ctx: Context) {
     val downloads = _downloads.asStateFlow()
 
     fun fileOf(t: Track) = File(musicDir, t.fileName)
+    fun coverOf(t: Track): File? = t.cover?.let { File(coversDir, it) }?.takeIf { it.exists() }
+
+    /** Kapak resmini indirip kaydeder, dosya adını döndürür (başarısızsa null). */
+    private fun saveCover(trackId: String, url: String?): String? {
+        if (url.isNullOrBlank() || !url.startsWith("http")) return null
+        return runCatching {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000; readTimeout = 30_000
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android) SubPlay")
+            }
+            try {
+                if (conn.responseCode !in 200..299) return null
+                val name = "$trackId.img"
+                conn.inputStream.use { i -> File(coversDir, name).outputStream().use { o -> i.copyTo(o) } }
+                name
+            } finally { conn.disconnect() }
+        }.getOrNull()
+    }
+
+    private fun saveEmbeddedCover(trackId: String, f: File): String? = runCatching {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(f.absolutePath)
+            val pic = r.embeddedPicture ?: return null
+            val name = "$trackId.img"
+            File(coversDir, name).writeBytes(pic)
+            name
+        } finally { runCatching { r.release() } }
+    }.getOrNull()
 
     // ---------------- İndirme ----------------
 
@@ -185,13 +216,16 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    private fun enqueueYt(source: String, title: String?, artist: String?, playlistId: String?, label: String) {
+    private fun enqueueYt(
+        source: String, title: String?, artist: String?, playlistId: String?, label: String,
+        coverUrl: String? = null,
+    ) {
         val id = newTask(source, label)
         scope.launch {
             try {
                 ytSlots.withPermit {
                     ensureYt()
-                    val t = ytDownload(id, source, title, artist)
+                    val t = ytDownload(id, source, title, artist, coverUrl)
                     if (playlistId != null) addToPlaylist(playlistId, t.id)
                 }
                 removeTask(id)
@@ -201,7 +235,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    private fun ytDownload(taskId: String, source: String, title: String?, artist: String?): Track {
+    private fun ytDownload(taskId: String, source: String, title: String?, artist: String?, coverUrl: String?): Track {
         val tmp = File(ctx.cacheDir, "yt_$taskId").apply { mkdirs() }
         try {
             val req = YoutubeDLRequest(source).apply {
@@ -209,7 +243,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 addOption("--no-playlist")
                 addOption("--no-mtime")
                 addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
-                addOption("--print", "after_move:%(title)s\t%(uploader)s")
+                addOption("--print", "after_move:%(title)s\t%(uploader)s\t%(thumbnail)s")
                 addOption("--no-simulate")
             }
             val resp = YoutubeDL.getInstance().execute(req, taskId) { p, _, _ ->
@@ -219,19 +253,24 @@ class MusicRepository private constructor(private val ctx: Context) {
                 ?: throw IOException("Ses dosyası inmedi")
 
             val info = resp.out.lines().lastOrNull { it.contains('\t') }
-            val ytTitle = info?.substringBefore('\t')?.takeIf { it.isNotBlank() && it != "NA" }
-            val ytUploader = info?.substringAfter('\t')?.removeSuffix(" - Topic")?.takeIf { it.isNotBlank() && it != "NA" }
+            val parts = info?.split('\t').orEmpty()
+            fun part(i: Int) = parts.getOrNull(i)?.trim()?.takeIf { it.isNotBlank() && it != "NA" }
+            val ytTitle = part(0)
+            val ytUploader = part(1)?.removeSuffix(" - Topic")
+            val ytThumb = part(2)
 
             val finalTitle = title?.takeIf { it.isNotBlank() } ?: ytTitle ?: "Şarkı"
             val target = uniqueFile(sanitize(finalTitle).ifBlank { "sarki" }, f.extension.ifBlank { "m4a" })
             f.copyTo(target)
+            val newId = UUID.randomUUID().toString()
             val track = Track(
-                id = UUID.randomUUID().toString(),
+                id = newId,
                 title = finalTitle,
                 artist = artist?.takeIf { it.isNotBlank() } ?: ytUploader.orEmpty(),
                 fileName = target.name,
                 sourceUrl = source,
                 addedAt = System.currentTimeMillis(),
+                cover = saveCover(newId, coverUrl) ?: saveCover(newId, ytThumb),
             )
             addTrack(track)
             return track
@@ -270,12 +309,12 @@ class MusicRepository private constructor(private val ctx: Context) {
         val id = newTask(url, "Spotify okunuyor…")
         scope.launch {
             try {
-                val (name, items) = resolveSpotify(url)
+                val (name, items, cover) = resolveSpotify(url)
                 if (items.isEmpty()) throw IOException("Spotify'da şarkı bulunamadı")
                 val plId = if (items.size > 1) createPlaylist(name.ifBlank { "Spotify listesi" }) else null
                 items.forEach { (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    enqueueYt("ytsearch1:$label audio", title, artist, plId, label)
+                    enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)
                 }
                 removeTask(id)
             } catch (e: Exception) {
@@ -300,7 +339,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     }
 
     /** Spotify'ın gömme sayfasından ad + sanatçı listesini okur (hesap/anahtar gerekmez). */
-    private fun resolveSpotify(input: String): Pair<String, List<Pair<String, String>>> {
+    private fun resolveSpotify(input: String): Triple<String, List<Pair<String, String>>, String?> {
         val pattern = Regex("open\\.spotify\\.com/(?:intl-[a-zA-Z-]+/)?(track|album|playlist)/([A-Za-z0-9]+)")
         var m = pattern.find(input)
         if (m == null) {
@@ -319,6 +358,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             ?: throw IOException("Spotify bilgisi okunamadı")
 
         val name = entity.optString("name").ifBlank { entity.optString("title") }
+        val cover = spotifyCover(entity)
         val list = entity.optJSONArray("trackList")
         if (type != "track" && list != null) {
             val items = (0 until list.length()).mapNotNull { i ->
@@ -326,12 +366,31 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val title = t.optString("title").ifBlank { return@mapNotNull null }
                 title to t.optString("subtitle").replace('\u00a0', ' ')
             }
-            return name to items
+            // Albümde tüm şarkılar aynı kapağı paylaşır; çalma listesinde YouTube kapağı kullanılır
+            return Triple(name, items, if (type == "album") cover else null)
         }
         val artists = entity.optJSONArray("artists")?.let { a ->
             (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") }.joinToString(", ")
         }.orEmpty().ifBlank { entity.optString("subtitle") }
-        return name to listOf(name to artists)
+        return Triple(name, listOf(name to artists), cover)
+    }
+
+    private fun spotifyCover(entity: JSONObject): String? {
+        fun best(arr: JSONArray?, w: String): String? {
+            arr ?: return null
+            var bestUrl: String? = null; var bestW = -1
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val u = o.optString("url")
+                if (u.isBlank()) continue
+                val width = o.optInt(w, 0)
+                if (width > bestW) { bestW = width; bestUrl = u }
+            }
+            return bestUrl
+        }
+        return best(entity.optJSONObject("visualIdentity")?.optJSONArray("image"), "maxWidth")
+            ?: best(entity.optJSONObject("coverArt")?.optJSONArray("sources"), "width")
+            ?: best(entity.optJSONArray("images"), "width")
     }
 
     fun dismissDownload(id: String) = synchronized(lock) {
@@ -412,13 +471,15 @@ class MusicRepository private constructor(private val ctx: Context) {
         if (!tmp.renameTo(target)) { tmp.copyTo(target, true); tmp.delete() }
 
         val (tagTitle, tagArtist) = readTags(target)
+        val newId = UUID.randomUUID().toString()
         val track = Track(
-            id = UUID.randomUUID().toString(),
+            id = newId,
             title = customTitle?.trim()?.takeIf { it.isNotEmpty() } ?: tagTitle ?: stem,
             artist = tagArtist.orEmpty(),
             fileName = target.name,
             sourceUrl = rawUrl,
             addedAt = System.currentTimeMillis(),
+            cover = saveEmbeddedCover(newId, target),
         )
         addTrack(track)
     }
@@ -476,6 +537,7 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     fun deleteTrack(t: Track) = synchronized(lock) {
         fileOf(t).delete()
+        coverOf(t)?.delete()
         _tracks.value = _tracks.value.filterNot { it.id == t.id }
         _playlists.value = _playlists.value.map { p -> p.copy(trackIds = p.trackIds - t.id) }
         saveTracks(); savePlaylists()
@@ -521,7 +583,8 @@ class MusicRepository private constructor(private val ctx: Context) {
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             Track(o.getString("id"), o.getString("title"), o.optString("artist"),
-                o.getString("fileName"), o.optString("sourceUrl"), o.optLong("addedAt"))
+                o.getString("fileName"), o.optString("sourceUrl"), o.optLong("addedAt"),
+                o.optString("cover").ifBlank { null })
         }.filter { File(musicDir, it.fileName).exists() }
     }.getOrDefault(emptyList())
 
@@ -529,7 +592,8 @@ class MusicRepository private constructor(private val ctx: Context) {
         val arr = JSONArray()
         _tracks.value.forEach {
             arr.put(JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist)
-                .put("fileName", it.fileName).put("sourceUrl", it.sourceUrl).put("addedAt", it.addedAt))
+                .put("fileName", it.fileName).put("sourceUrl", it.sourceUrl).put("addedAt", it.addedAt)
+                .put("cover", it.cover ?: ""))
         }
         libFile.writeText(arr.toString())
     }

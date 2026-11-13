@@ -60,5 +60,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.google.guava:guava:33.3.1-android")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.4")
 }

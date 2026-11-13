@@ -1,6 +1,13 @@
 package com.dogukan.muzik.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,40 +16,36 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import android.widget.Toast
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -50,17 +53,15 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,41 +70,54 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.Player
 import com.dogukan.muzik.MainViewModel
-import com.dogukan.muzik.PlayerUi
 import com.dogukan.muzik.data.DownloadTask
 import com.dogukan.muzik.data.Playlist
 import com.dogukan.muzik.data.SearchResult
 import com.dogukan.muzik.data.Track
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.Locale
 
 private val TR = Locale("tr")
 
 @Composable
-fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
+fun App(
+    vm: MainViewModel,
+    sharedUrl: String?,
+    onSharedConsumed: () -> Unit,
+    tema: TemaAyar,
+    onTema: (TemaAyar) -> Unit,
+) {
     val tracks by vm.repo.tracks.collectAsStateWithLifecycle()
     val playlists by vm.repo.playlists.collectAsStateWithLifecycle()
     val downloads by vm.repo.downloads.collectAsStateWithLifecycle()
     val player by vm.ui.collectAsStateWithLifecycle()
     val update by vm.update.collectAsStateWithLifecycle()
-    val appCtx = LocalContext.current
-    var showToken by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val c = MaterialTheme.colorScheme
+    val neon = LocalNeon.current
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showPlayer by rememberSaveable { mutableStateOf(false) }
 
     var showAdd by remember { mutableStateOf(false) }
     var addInitial by remember { mutableStateOf("") }
+    var showToken by remember { mutableStateOf(false) }
     var pickPlaylistFor by remember { mutableStateOf<Track?>(null) }
     var confirmDelete by remember { mutableStateOf<Track?>(null) }
     var editTrack by remember { mutableStateOf<Track?>(null) }
+
+    val coverOf: (Track) -> File? = { vm.repo.coverOf(it) }
+    val toast: (String) -> Unit = { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() }
 
     LaunchedEffect(sharedUrl) {
         if (sharedUrl != null) {
@@ -114,7 +128,8 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
         }
     }
 
-    BackHandler(enabled = tab == 1 && openPlaylistId != null) { openPlaylistId = null }
+    BackHandler(enabled = showPlayer) { showPlayer = false }
+    BackHandler(enabled = !showPlayer && tab == 1 && openPlaylistId != null) { openPlaylistId = null }
 
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = t })
@@ -122,59 +137,90 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
         DropdownMenuItem(text = { Text("Sil") }, onClick = { close(); confirmDelete = t })
     }
 
-    Scaffold(
-        floatingActionButton = {
-            if (tab == 0) {
-                FloatingActionButton(onClick = { addInitial = ""; showAdd = true }) {
-                    Icon(Icons.Default.Add, contentDescription = "Link ekle")
+    Box(Modifier.fillMaxSize().background(arkaPlan())) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            floatingActionButton = {
+                if (tab == 0) {
+                    FloatingActionButton(
+                        onClick = { addInitial = ""; showAdd = true },
+                        shape = CircleShape,
+                        containerColor = c.primary,
+                        contentColor = c.onPrimary,
+                        modifier = if (neon) Modifier.shadow(18.dp, CircleShape, ambientColor = c.primary, spotColor = c.primary) else Modifier,
+                    ) { Icon(Icons.Default.Add, contentDescription = "Şarkı ekle") }
                 }
-            }
-        },
-        bottomBar = {
-            Column {
-                if (player.title != null) MiniPlayer(player, vm)
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = tab == 0, onClick = { tab = 0 },
-                        icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Kütüphane") },
+            },
+            bottomBar = {
+                Column {
+                    if (player.title != null) MiniPlayer(player, vm, onOpen = { showPlayer = true })
+                    NavigationBar(
+                        containerColor = if (neon) c.surface.copy(alpha = 0.85f) else c.surfaceContainer,
+                        tonalElevation = 0.dp,
+                    ) {
+                        val itemColors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = c.onPrimary, indicatorColor = c.primary,
+                            selectedTextColor = c.primary,
+                        )
+                        NavigationBarItem(
+                            selected = tab == 0, onClick = { tab = 0 }, colors = itemColors,
+                            icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Kütüphane") },
+                        )
+                        NavigationBarItem(
+                            selected = tab == 1, onClick = { tab = 1 }, colors = itemColors,
+                            icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }, label = { Text("Listeler") },
+                        )
+                        NavigationBarItem(
+                            selected = tab == 2, onClick = { tab = 2 }, colors = itemColors,
+                            icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Ayarlar") },
+                        )
+                    }
+                }
+            },
+        ) { pad ->
+            Box(Modifier.padding(pad).fillMaxSize()) {
+                val openPl = playlists.find { it.id == openPlaylistId }
+                when {
+                    tab == 0 -> LibraryScreen(
+                        tracks, downloads, player.currentId, coverOf,
+                        onPlay = { list, i -> vm.playTracks(list, i) },
+                        onDismissDownload = vm.repo::dismissDownload,
+                        menu = trackMenu,
                     )
-                    NavigationBarItem(
-                        selected = tab == 1, onClick = { tab = 1 },
-                        icon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }, label = { Text("Listeler") },
+                    tab == 1 && openPl != null -> PlaylistDetail(
+                        openPl, tracks, player.currentId, coverOf,
+                        onBack = { openPlaylistId = null },
+                        onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
+                        onRemove = { vm.repo.removeFromPlaylist(openPl.id, it.id) },
+                    )
+                    tab == 1 -> PlaylistsScreen(
+                        playlists, tracks, coverOf,
+                        onOpen = { openPlaylistId = it.id },
+                        onCreate = { vm.repo.createPlaylist(it) },
+                        onDelete = { vm.repo.deletePlaylist(it.id) },
+                    )
+                    else -> SettingsScreen(
+                        tema = tema,
+                        onTema = onTema,
+                        version = vm.currentVersion,
+                        onCheckUpdate = { vm.checkUpdate(manual = true, onMessage = toast) },
+                        onToken = { showToken = true },
+                        onUpdateDownloader = vm.repo::updateYtDlp,
                     )
                 }
-            }
-        },
-    ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
-            val openPl = playlists.find { it.id == openPlaylistId }
-            when {
-                tab == 0 -> LibraryScreen(
-                    tracks, downloads, player.currentId,
-                    onPlay = { list, i -> vm.playTracks(list, i) },
-                    onDismissDownload = vm.repo::dismissDownload,
-                    onUpdateDownloader = vm.repo::updateYtDlp,
-                    onCheckUpdate = {
-                        vm.checkUpdate(manual = true) { Toast.makeText(appCtx, it, Toast.LENGTH_LONG).show() }
-                    },
-                    onToken = { showToken = true },
-                    menu = trackMenu,
-                )
-                openPl != null -> PlaylistDetail(
-                    openPl, tracks, player.currentId,
-                    onBack = { openPlaylistId = null },
-                    onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
-                    onRemove = { vm.repo.removeFromPlaylist(openPl.id, it.id) },
-                )
-                else -> PlaylistsScreen(
-                    playlists,
-                    onOpen = { openPlaylistId = it.id },
-                    onCreate = { vm.repo.createPlaylist(it) },
-                    onDelete = { vm.repo.deletePlaylist(it.id) },
-                )
             }
         }
+
+        AnimatedVisibility(
+            visible = showPlayer && player.title != null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+        ) {
+            FullPlayer(player, vm, onClose = { showPlayer = false })
+        }
     }
+
+    // ---------------- Diyaloglar ----------------
 
     if (showAdd) {
         AddDialog(
@@ -202,7 +248,7 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     vm.setToken(tok); showToken = false
-                    vm.checkUpdate(manual = true) { Toast.makeText(appCtx, it, Toast.LENGTH_LONG).show() }
+                    vm.checkUpdate(manual = true, onMessage = toast)
                 }) { Text("Kaydet") }
             },
             dismissButton = { TextButton(onClick = { showToken = false }) { Text("Vazgeç") } },
@@ -286,18 +332,13 @@ private fun LibraryScreen(
     tracks: List<Track>,
     downloads: List<DownloadTask>,
     currentId: String?,
+    coverOf: (Track) -> File?,
     onPlay: (List<Track>, Int) -> Unit,
     onDismissDownload: (String) -> Unit,
-    onUpdateDownloader: suspend () -> String,
-    onCheckUpdate: () -> Unit,
-    onToken: () -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
+    val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
-    var menuOpen by remember { mutableStateOf(false) }
-    var updating by remember { mutableStateOf(false) }
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
     val filtered = remember(tracks, query) {
         val q = query.trim().lowercase(TR)
         if (q.isEmpty()) tracks
@@ -305,8 +346,11 @@ private fun LibraryScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 12.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+        ScreenTitle("Kütüphane") {
+            if (tracks.isNotEmpty()) {
+                Text("${tracks.size} şarkı", style = MaterialTheme.typography.labelLarge, color = c.onSurfaceVariant)
+            }
+        }
         OutlinedTextField(
             value = query, onValueChange = { query = it },
             placeholder = { Text("Kütüphanede ara") },
@@ -315,63 +359,68 @@ private fun LibraryScreen(
                 if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Temizle") }
             },
             singleLine = true,
-            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(50),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedContainerColor = c.surfaceVariant.copy(alpha = 0.55f),
+                focusedContainerColor = c.surfaceVariant.copy(alpha = 0.55f),
+                unfocusedBorderColor = Color.Transparent,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
-        Box {
-            if (updating) {
-                CircularProgressIndicator(Modifier.padding(12.dp).size(24.dp))
-            } else {
-                IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Menü") }
+        if (filtered.isNotEmpty()) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onPlay(filtered, 0) }) {
+                    Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Tümünü çal")
+                }
             }
-            DropdownMenu(menuOpen, { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text("İndiriciyi güncelle") },
-                    onClick = {
-                        menuOpen = false
-                        updating = true
-                        scope.launch {
-                            val msg = onUpdateDownloader()
-                            updating = false
-                            Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                )
-                DropdownMenuItem(text = { Text("Güncellemeleri denetle") }, onClick = { menuOpen = false; onCheckUpdate() })
-                DropdownMenuItem(text = { Text("GitHub token") }, onClick = { menuOpen = false; onToken() })
-            }
-        }
         }
         LazyColumn(Modifier.fillMaxSize()) {
             items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload) }
             if (filtered.isEmpty() && downloads.isEmpty()) {
                 item {
-                    Text(
-                        if (tracks.isEmpty()) "Henüz şarkı yok.\n+ tuşuna basıp şarkı adı ara ya da YouTube/Spotify linki yapıştır. YouTube veya Spotify'da \"Paylaş → Müzik\" de olur."
-                        else "Sonuç bulunamadı.",
-                        modifier = Modifier.padding(24.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    EmptyState(
+                        if (tracks.isEmpty()) "Henüz şarkı yok.\n+ tuşuna basıp şarkı adı ara ya da YouTube / Spotify linki yapıştır."
+                        else "Sonuç bulunamadı."
                     )
                 }
             }
             itemsIndexed(filtered, key = { _, t -> t.id }) { i, t ->
-                TrackRow(t, playing = t.id == currentId, onClick = { onPlay(filtered, i) }, menu = { close -> menu(t, close) })
+                TrackRow(t, coverOf(t), playing = t.id == currentId, onClick = { onPlay(filtered, i) },
+                    menu = { close -> menu(t, close) })
             }
-            item { Spacer(Modifier.heightIn(min = 80.dp)) }
+            item { Spacer(Modifier.height(88.dp)) }
         }
     }
 }
 
 @Composable
+private fun EmptyState(text: String) {
+    Column(Modifier.fillMaxWidth().padding(40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Kapak(null, Modifier.size(96.dp), corner = 48.dp)
+        Spacer(Modifier.height(16.dp))
+        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+@Composable
 private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit) {
+    val c = MaterialTheme.colorScheme
     ListItem(
+        colors = transparentRow(),
+        leadingContent = {
+            Box(Modifier.size(52.dp).background(c.surfaceVariant, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Download, null, tint = if (d.error != null) c.error else c.primary)
+            }
+        },
         headlineContent = { Text(d.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         supportingContent = {
             if (d.error != null) {
-                Text(d.error, color = MaterialTheme.colorScheme.error)
+                Text(d.error, color = c.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
             } else if (d.progress != null) {
-                LinearProgressIndicator(progress = { d.progress }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+                LinearProgressIndicator(progress = { d.progress }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
             } else {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 6.dp))
+                LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
             }
         },
         trailingContent = {
@@ -383,23 +432,32 @@ private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit) {
 @Composable
 private fun TrackRow(
     t: Track,
+    cover: File?,
     playing: Boolean,
     onClick: () -> Unit,
     menu: @Composable (close: () -> Unit) -> Unit,
 ) {
+    val c = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
-    val accent = if (playing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     ListItem(
+        colors = transparentRow(),
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = {
-            Icon(if (playing) Icons.Default.VolumeUp else Icons.Default.MusicNote, null, tint = accent)
+            Box(contentAlignment = Alignment.Center) {
+                Kapak(cover, Modifier.size(52.dp), corner = 10.dp)
+                if (playing) {
+                    Box(Modifier.size(52.dp).background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(10.dp)))
+                    Icon(Icons.Default.GraphicEq, null, tint = c.primary)
+                }
+            }
         },
         headlineContent = {
-            Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = accent,
-                fontWeight = if (playing) FontWeight.Bold else null)
+            Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (playing) c.primary else c.onSurface,
+                fontWeight = if (playing) FontWeight.Bold else FontWeight.Medium)
         },
         supportingContent = if (t.artist.isNotBlank()) {
-            { Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            { Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) }
         } else null,
         trailingContent = {
             Box {
@@ -417,27 +475,32 @@ private fun TrackRow(
 @Composable
 private fun PlaylistsScreen(
     playlists: List<Playlist>,
+    library: List<Track>,
+    coverOf: (Track) -> File?,
     onOpen: (Playlist) -> Unit,
     onCreate: (String) -> Unit,
     onDelete: (Playlist) -> Unit,
 ) {
     var showNew by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<Playlist?>(null) }
+    val byId = remember(library) { library.associateBy { it.id } }
 
     Column(Modifier.fillMaxSize()) {
-        Button(onClick = { showNew = true }, modifier = Modifier.padding(12.dp)) {
-            Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Yeni liste")
+        ScreenTitle("Listeler") {
+            FilledTonalButton(onClick = { showNew = true }) {
+                Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Yeni")
+            }
         }
-        if (playlists.isEmpty()) {
-            Text("Henüz çalma listesi yok.", Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        if (playlists.isEmpty()) EmptyState("Henüz çalma listesi yok.")
         LazyColumn {
             items(playlists, key = { it.id }) { p ->
                 var expanded by remember { mutableStateOf(false) }
+                val first = p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
                 ListItem(
+                    colors = transparentRow(),
                     modifier = Modifier.clickable { onOpen(p) },
-                    leadingContent = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
-                    headlineContent = { Text(p.name) },
+                    leadingContent = { Kapak(first, Modifier.size(60.dp), corner = 12.dp) },
+                    headlineContent = { Text(p.name, fontWeight = FontWeight.SemiBold) },
                     supportingContent = { Text("${p.trackIds.size} şarkı") },
                     trailingContent = {
                         Box {
@@ -449,6 +512,7 @@ private fun PlaylistsScreen(
                     },
                 )
             }
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 
@@ -470,38 +534,52 @@ private fun PlaylistDetail(
     playlist: Playlist,
     library: List<Track>,
     currentId: String?,
+    coverOf: (Track) -> File?,
     onBack: () -> Unit,
     onPlay: (List<Track>, Int, Boolean) -> Unit,
     onRemove: (Track) -> Unit,
 ) {
+    val c = MaterialTheme.colorScheme
     val byId = remember(library) { library.associateBy { it.id } }
     val songs = remember(playlist, byId) { playlist.trackIds.mapNotNull { byId[it] } }
+    val headerCover = songs.firstNotNullOfOrNull(coverOf)
 
-    Column(Modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
-            Text(playlist.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, 0, false) }) {
-                Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Çal")
+    LazyColumn(Modifier.fillMaxSize()) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
             }
-            OutlinedButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, songs.indices.random(), true) }) {
-                Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık")
-            }
-        }
-        HorizontalDivider(Modifier.padding(top = 8.dp))
-        if (songs.isEmpty()) {
-            Text("Liste boş. Kütüphanede bir şarkının ⋮ menüsünden \"Listeye ekle\"yi seç.",
-                Modifier.padding(24.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        LazyColumn {
-            itemsIndexed(songs, key = { _, t -> t.id }) { i, t ->
-                TrackRow(t, t.id == currentId, onClick = { onPlay(songs, i, false) }) { close ->
-                    DropdownMenuItem(text = { Text("Listeden çıkar") }, onClick = { close(); onRemove(t) })
+            Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Kapak(
+                    headerCover,
+                    Modifier.size(128.dp).shadow(16.dp, RoundedCornerShape(18.dp),
+                        ambientColor = c.primary, spotColor = c.primary),
+                    corner = 18.dp,
+                )
+                Column(Modifier.padding(start = 16.dp)) {
+                    Text(playlist.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${songs.size} şarkı", color = c.onSurfaceVariant)
                 }
             }
+            Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, 0, false) }) {
+                    Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Çal")
+                }
+                FilledTonalButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, songs.indices.random(), true) }) {
+                    Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık")
+                }
+            }
+            if (songs.isEmpty()) {
+                EmptyState("Liste boş. Kütüphanede bir şarkının ⋮ menüsünden \"Listeye ekle\"yi seç.")
+            }
         }
+        itemsIndexed(songs, key = { _, t -> t.id }) { i, t ->
+            TrackRow(t, coverOf(t), t.id == currentId, onClick = { onPlay(songs, i, false) }) { close ->
+                DropdownMenuItem(text = { Text("Listeden çıkar") }, onClick = { close(); onRemove(t) })
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }
 
@@ -559,7 +637,11 @@ private fun AddDialog(
                     LazyColumn(Modifier.heightIn(max = 360.dp)) {
                         items(results, key = { it.id }) { r ->
                             ListItem(
+                                colors = transparentRow(),
                                 modifier = Modifier.clickable { onPick(r) },
+                                leadingContent = {
+                                    Kapak("https://i.ytimg.com/vi/${r.id}/mqdefault.jpg", Modifier.size(48.dp), corner = 8.dp)
+                                },
                                 headlineContent = { Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
                                 supportingContent = {
                                     Text(listOf(r.channel, if (r.duration > 0) fmt(r.duration * 1000) else "")
@@ -597,6 +679,7 @@ private fun AddToPlaylistDialog(
             Column {
                 playlists.forEach { p ->
                     ListItem(
+                        colors = transparentRow(),
                         modifier = Modifier.clickable { onPick(p.id) },
                         leadingContent = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
                         headlineContent = { Text(p.name) },
@@ -621,63 +704,4 @@ private fun NameDialog(title: String, onDismiss: () -> Unit, onOk: (String) -> U
         confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onOk(name.trim()) }) { Text("Oluştur") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
     )
-}
-
-// ---------------- Mini oynatıcı ----------------
-
-@Composable
-private fun MiniPlayer(ui: PlayerUi, vm: MainViewModel) {
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
-    val fraction = if (ui.duration > 0) (ui.position.toFloat() / ui.duration).coerceIn(0f, 1f) else 0f
-
-    Surface(tonalElevation = 3.dp) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text(ui.title.orEmpty(), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (ui.artist.isNotBlank()) {
-                Text(ui.artist, style = MaterialTheme.typography.bodySmall, maxLines = 1,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Slider(
-                value = if (dragging) dragValue else fraction,
-                onValueChange = { dragging = true; dragValue = it },
-                onValueChangeFinished = { vm.seekTo((dragValue * ui.duration).toLong()); dragging = false },
-                enabled = ui.duration > 0,
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                val shown = if (dragging) (dragValue * ui.duration).toLong() else ui.position
-                Text(fmt(shown), style = MaterialTheme.typography.labelSmall)
-                Text(fmt(ui.duration), style = MaterialTheme.typography.labelSmall)
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val on = MaterialTheme.colorScheme.primary
-                val off = MaterialTheme.colorScheme.onSurfaceVariant
-                IconButton(onClick = vm::toggleShuffle) {
-                    Icon(Icons.Default.Shuffle, "Karışık", tint = if (ui.shuffle) on else off)
-                }
-                IconButton(onClick = vm::previous) { Icon(Icons.Default.SkipPrevious, "Önceki") }
-                FilledIconButton(onClick = vm::togglePlay) {
-                    Icon(if (ui.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        if (ui.isPlaying) "Duraklat" else "Çal")
-                }
-                IconButton(onClick = vm::next) { Icon(Icons.Default.SkipNext, "Sonraki") }
-                IconButton(onClick = vm::cycleRepeat) {
-                    Icon(
-                        if (ui.repeat == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                        "Tekrar", tint = if (ui.repeat == Player.REPEAT_MODE_OFF) off else on,
-                    )
-                }
-            }
-        }
-    }
-}
-
-private fun fmt(ms: Long): String {
-    val s = ms / 1000
-    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60)
-    else "%d:%02d".format(s / 60, s % 60)
 }

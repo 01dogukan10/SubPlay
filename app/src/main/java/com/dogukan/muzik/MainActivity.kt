@@ -7,19 +7,21 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dogukan.muzik.ui.App
+import com.dogukan.muzik.ui.SubPlayTema
+import com.dogukan.muzik.ui.TemaDeposu
 
 class MainActivity : ComponentActivity() {
 
     private val sharedUrl = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         handleIntent(intent)
 
@@ -29,11 +31,18 @@ class MainActivity : ComponentActivity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
+        val temaDeposu = TemaDeposu.get(this)
         setContent {
-            val scheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-            MaterialTheme(colorScheme = scheme) {
+            val tema by temaDeposu.ayar.collectAsStateWithLifecycle()
+            SubPlayTema(tema) {
                 val vm: MainViewModel = viewModel()
-                App(vm, sharedUrl.value) { sharedUrl.value = null }
+                App(
+                    vm = vm,
+                    sharedUrl = sharedUrl.value,
+                    onSharedConsumed = { sharedUrl.value = null },
+                    tema = tema,
+                    onTema = temaDeposu::kaydet,
+                )
             }
         }
     }

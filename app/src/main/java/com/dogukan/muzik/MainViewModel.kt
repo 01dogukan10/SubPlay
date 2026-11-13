@@ -28,6 +28,7 @@ data class PlayerUi(
     val currentId: String? = null,
     val title: String? = null,
     val artist: String = "",
+    val artwork: Uri? = null,
     val isPlaying: Boolean = false,
     val position: Long = 0,
     val duration: Long = 0,
@@ -125,6 +126,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             currentId = item?.mediaId,
             title = item?.let { c.mediaMetadata.title?.toString() ?: it.mediaMetadata.title?.toString() ?: "" },
             artist = c.mediaMetadata.artist?.toString().orEmpty(),
+            artwork = c.mediaMetadata.artworkUri,
             isPlaying = c.isPlaying,
             position = c.currentPosition.coerceAtLeast(0),
             duration = c.duration.coerceAtLeast(0),
@@ -143,6 +145,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 MediaMetadata.Builder()
                     .setTitle(title)
                     .setArtist(artist.ifBlank { null })
+                    .setArtworkUri(repo.coverOf(this)?.let { Uri.fromFile(it) })
                     .build()
             )
             .build()
