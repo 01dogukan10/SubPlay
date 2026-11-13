@@ -12,10 +12,26 @@ android {
         applicationId = "com.dogukan.muzik"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        val yapi = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionCode = 100 + yapi
+        versionName = "1.0.$yapi"
+    }
+    signingConfigs {
+        create("sabit") {
+            val yol = System.getenv("KS_PATH")
+            if (yol != null) {
+                storeFile = file(yol)
+                storeType = "pkcs12"
+                storePassword = System.getenv("KS_PASS")
+                keyAlias = "cizgi"
+                keyPassword = System.getenv("KS_PASS")
+            }
+        }
     }
     buildTypes {
+        getByName("debug") {
+            if (System.getenv("KS_PATH") != null) signingConfig = signingConfigs.getByName("sabit")
+        }
         release { isMinifyEnabled = false }
     }
     compileOptions {
