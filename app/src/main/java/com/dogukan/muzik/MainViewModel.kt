@@ -14,6 +14,10 @@ import androidx.media3.session.SessionToken
 import com.dogukan.muzik.data.MusicRepository
 import com.dogukan.muzik.data.Track
 import com.dogukan.muzik.player.PlaybackService
+import com.dogukan.muzik.update.Guncelle
+import com.dogukan.muzik.update.Surum
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +33,13 @@ data class PlayerUi(
     val duration: Long = 0,
     val shuffle: Boolean = false,
     val repeat: Int = Player.REPEAT_MODE_OFF,
+)
+
+data class UpdateUi(
+    val surum: Surum? = null,
+    val downloading: Boolean = false,
+    val progress: Float? = null,
+    val error: String? = null,
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -47,7 +58,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         override fun onEvents(player: Player, events: Player.Events) = refresh()
     }
 
+    private val _update = MutableStateFlow(UpdateUi())
+    val update = _update.asStateFlow()
+
+    val currentVersion: String get() = Guncelle.mevcutAd(getApplication())
+    fun token(): String = Guncelle.token(getApplication())
+    fun setToken(t: String) = Guncelle.setToken(getApplication(), t)
+
+    /** manual=false: açılışta sessiz kontrol. */
+    fun checkUpdate(manual: Boolean, onMessage: (String) -> Unit = {}) {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            try {
+                val s = withContext(Dispatchers.IO) { Guncelle.sonSurum(app) }
+                if (s != null && Guncelle.yeniMi(app, s)) _update.value = UpdateUi(surum = s)
+                else if (manual) onMessage("Uygulama güncel (sürüm $currentVersion)")
+            } catch (e: Exception) {
+                if (manual) onMessage(e.message ?: "Güncelleme denetlenemedi")
+            }
+        }
+    }
+
+    fun installUpdate() {
+        val app = getApplication<Application>()
+        val s = _update.value.surum ?: return
+        if (_update.value.downloading) return
+        if (!Guncelle.kurabilir(app)) { Guncelle.izinAc(app); return }
+        _update.value = _update.value.copy(downloading = true, progress = null, error = null)
+        viewModelScope.launch {
+            try {
+                val f = withContext(Dispatchers.IO) {
+                    Guncelle.indir(app, s) { p -> _update.value = _update.value.copy(progress = p) }
+                }
+                _update.value = _update.value.copy(downloading = false)
+                Guncelle.kur(app, f)
+            } catch (e: Exception) {
+                _update.value = _update.value.copy(downloading = false, error = e.message ?: "İndirilemedi")
+            }
+        }
+    }
+
+    fun dismissUpdate() { _update.value = UpdateUi() }
+
     init {
+        Guncelle.zamanla(app)
+        checkUpdate(manual = false)
         future.addListener({
             controller = runCatching { future.get() }.getOrNull()
             controller?.addListener(listener)

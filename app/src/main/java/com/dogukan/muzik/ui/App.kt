@@ -92,6 +92,9 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
     val playlists by vm.repo.playlists.collectAsStateWithLifecycle()
     val downloads by vm.repo.downloads.collectAsStateWithLifecycle()
     val player by vm.ui.collectAsStateWithLifecycle()
+    val update by vm.update.collectAsStateWithLifecycle()
+    val appCtx = LocalContext.current
+    var showToken by remember { mutableStateOf(false) }
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -151,6 +154,10 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
                     onPlay = { list, i -> vm.playTracks(list, i) },
                     onDismissDownload = vm.repo::dismissDownload,
                     onUpdateDownloader = vm.repo::updateYtDlp,
+                    onCheckUpdate = {
+                        vm.checkUpdate(manual = true) { Toast.makeText(appCtx, it, Toast.LENGTH_LONG).show() }
+                    },
+                    onToken = { showToken = true },
                     menu = trackMenu,
                 )
                 openPl != null -> PlaylistDetail(
@@ -176,6 +183,57 @@ fun App(vm: MainViewModel, sharedUrl: String?, onSharedConsumed: () -> Unit) {
             onAdd = { url, title -> vm.repo.startDownload(url, title); showAdd = false },
             onSearch = vm.repo::search,
             onPick = { vm.repo.downloadSearchResult(it); showAdd = false },
+        )
+    }
+
+    if (showToken) {
+        var tok by remember { mutableStateOf(vm.token()) }
+        AlertDialog(
+            onDismissRequest = { showToken = false },
+            title = { Text("GitHub token") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Gizli SubPlay reposundan güncelleme almak için salt-okunur (Contents: Read) bir token yapıştır.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(tok, { tok = it }, label = { Text("github_pat_…") }, singleLine = true,
+                        modifier = Modifier.fillMaxWidth())
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.setToken(tok); showToken = false
+                    vm.checkUpdate(manual = true) { Toast.makeText(appCtx, it, Toast.LENGTH_LONG).show() }
+                }) { Text("Kaydet") }
+            },
+            dismissButton = { TextButton(onClick = { showToken = false }) { Text("Vazgeç") } },
+        )
+    }
+
+    update.surum?.let { s ->
+        AlertDialog(
+            onDismissRequest = { if (!update.downloading) vm.dismissUpdate() },
+            title = { Text("Yeni sürüm: ${s.ad}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Şu anki sürüm: ${vm.currentVersion}")
+                    if (s.not.isNotBlank()) Text(s.not, style = MaterialTheme.typography.bodySmall, maxLines = 6,
+                        overflow = TextOverflow.Ellipsis)
+                    if (update.downloading) {
+                        val p = update.progress
+                        if (p != null) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())
+                        else LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                    update.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !update.downloading, onClick = vm::installUpdate) {
+                    Text(if (update.downloading) "İndiriliyor…" else "Güncelle")
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !update.downloading, onClick = vm::dismissUpdate) { Text("Sonra") }
+            },
         )
     }
 
@@ -231,6 +289,8 @@ private fun LibraryScreen(
     onPlay: (List<Track>, Int) -> Unit,
     onDismissDownload: (String) -> Unit,
     onUpdateDownloader: suspend () -> String,
+    onCheckUpdate: () -> Unit,
+    onToken: () -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -276,6 +336,8 @@ private fun LibraryScreen(
                         }
                     },
                 )
+                DropdownMenuItem(text = { Text("Güncellemeleri denetle") }, onClick = { menuOpen = false; onCheckUpdate() })
+                DropdownMenuItem(text = { Text("GitHub token") }, onClick = { menuOpen = false; onToken() })
             }
         }
         }
