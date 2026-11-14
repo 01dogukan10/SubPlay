@@ -879,6 +879,32 @@ class MusicRepository private constructor(private val ctx: Context) {
         savePlaylists()
     }
 
+    fun renamePlaylist(playlistId: String, name: String) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { if (it.id == playlistId) it.copy(name = name.trim()) else it }
+        savePlaylists()
+    }
+
+    fun addTracksToPlaylist(playlistId: String, trackIds: List<String>) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { p ->
+            if (p.id == playlistId) p.copy(trackIds = p.trackIds + trackIds.filterNot { it in p.trackIds }) else p
+        }
+        savePlaylists()
+    }
+
+    /** Listedeki bir şarkıyı başka bir sıraya taşır. */
+    fun moveInPlaylist(playlistId: String, trackId: String, delta: Int) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { p ->
+            if (p.id != playlistId) return@map p
+            val from = p.trackIds.indexOf(trackId)
+            val to = (from + delta).coerceIn(0, p.trackIds.lastIndex)
+            if (from < 0 || from == to) return@map p
+            val list = p.trackIds.toMutableList()
+            list.add(to, list.removeAt(from))
+            p.copy(trackIds = list)
+        }
+        savePlaylists()
+    }
+
     fun removeFromPlaylist(playlistId: String, trackId: String) = synchronized(lock) {
         _playlists.value = _playlists.value.map {
             if (it.id == playlistId) it.copy(trackIds = it.trackIds - trackId) else it
