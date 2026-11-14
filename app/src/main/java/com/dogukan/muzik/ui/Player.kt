@@ -93,7 +93,7 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
                             overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant)
                     }
                 }
-                IconButton(onClick = vm::togglePlay) {
+                IconButton(onClick = vm::togglePlay, modifier = Modifier.neonCerceve(CircleShape, glow = false)) {
                     Icon(if (ui.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         if (ui.isPlaying) "Duraklat" else "Çal", modifier = Modifier.size(30.dp))
                 }
@@ -147,6 +147,9 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
             )
         )
 
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.material3.LocalContentColor provides c.onBackground,
+        ) {
         BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding()) {
             val wide = maxWidth > maxHeight
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
@@ -181,6 +184,7 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
                     Spacer(Modifier.height(36.dp))
                 }
             }
+        }
         }
     }
 }
@@ -255,7 +259,7 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel) {
             onClick = vm::togglePlay,
             modifier = Modifier
                 .size(76.dp)
-                .then(if (neon) Modifier.shadow(20.dp, CircleShape, ambientColor = c.primary, spotColor = c.primary) else Modifier),
+                .neonCerceve(CircleShape),
             shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(containerColor = c.primary, contentColor = c.onPrimary),
         ) {
