@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Share
 import com.dogukan.muzik.data.siraAnahtari
@@ -332,8 +333,14 @@ fun App(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Şu anki sürüm: ${vm.currentVersion}")
-                    if (s.not.isNotBlank()) Text(s.not, style = MaterialTheme.typography.bodySmall, maxLines = 6,
-                        overflow = TextOverflow.Ellipsis)
+                    if (s.not.isNotBlank()) {
+                        Text("Yenilikler", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            s.not, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.heightIn(max = 260.dp)
+                                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                        )
+                    }
                     if (update.downloading) {
                         val p = update.progress
                         if (p != null) LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth())

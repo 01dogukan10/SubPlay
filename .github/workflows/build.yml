@@ -31,13 +31,18 @@ jobs:
         with:
           name: SubPlay-apk
           path: subplay.apk
-      - name: Sürüm notu (sadece commit başlığı)
+      - name: Sürüm notu (commit mesajı, imza satırları hariç)
         id: not
-        run: echo "baslik=$(git log -1 --format=%s)" >> "$GITHUB_OUTPUT"
+        run: |
+          {
+            echo "metin<<SURUMNOTU_SONU"
+            git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session):' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
+            echo "SURUMNOTU_SONU"
+          } >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
           name: Sürüm ${{ github.run_number }}
-          body: ${{ steps.not.outputs.baslik }}
+          body: ${{ steps.not.outputs.metin }}
           files: subplay.apk
           make_latest: true
