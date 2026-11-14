@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -162,7 +163,7 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue
                         color = c.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onOpenQueue) {
-                        Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.QueueMusic, "Sıra")
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, "Sıra")
                     }
                 }
                 if (wide) {
