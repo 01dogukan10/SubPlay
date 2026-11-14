@@ -46,6 +46,8 @@ NASIL KULLANILIR?
 - Sıralama: şarkı sayısının yanındaki ⇅ ile isme, sanatçıya ya da eklenme tarihine göre sırala.
 - Birden çok şarkı seçmek: bir şarkıya basılı tut, sonra diğerlerine dokun. Üstte sil, listeye ekle ve paylaş düğmeleri çıkar.
 - Hızlı kaydırma: sağ kenardaki ince çubuğu sürükle.
+- İndirmeden eklemek: şarkı eklerken "Telefona indir" anahtarını kapatırsan şarkı sadece kütüphaneye eklenir, çalınca internetten gelir. İndirilmiş şarkıların yanında renkli ↓ işareti olur.
+- Silmek: şarkının ⋮ menüsünde "Telefondan sil" sadece dosyayı siler (şarkı kütüphanede kalır, internetten çalar); "Kütüphaneden kaldır" şarkıyı tamamen kaldırır.
 - Liste düzenlemek: listeyi aç, sağ üstteki ✏️'ye bas. Adını değiştirebilir, şarkı ekleyip çıkarabilir, ▲▼ ile sırayı değiştirebilir ve galeriden kapak resmi seçebilirsin.
 
 * Paylaşmak
