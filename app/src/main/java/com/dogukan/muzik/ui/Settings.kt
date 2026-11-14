@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Link
@@ -68,7 +70,8 @@ fun SettingsScreen(
     onTema: (TemaAyar) -> Unit,
     version: String,
     onCheckUpdate: () -> Unit,
-    onToken: () -> Unit,
+    onExportBackup: (android.net.Uri) -> Unit,
+    onImportBackup: (android.net.Uri) -> Unit,
     onUpdateDownloader: suspend () -> String,
     spotifyBagli: Boolean,
     spotifyClientId: String,
@@ -179,6 +182,29 @@ fun SettingsScreen(
             }
         }
 
+        Section("Yedek / taşıma") {
+            val exportPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+            ) { uri -> if (uri != null) onExportBackup(uri) }
+            val importPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+            ) { uri -> if (uri != null) onImportBackup(uri) }
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { exportPicker.launch(null) },
+                leadingContent = { Icon(Icons.Default.Backup, null) },
+                headlineContent = { Text("Yedekle") },
+                supportingContent = { Text("Şarkıları, kapakları ve listeleri seçtiğin klasöre kopyalar (örn. Music ya da Download)") },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { importPicker.launch(null) },
+                leadingContent = { Icon(Icons.Default.Restore, null) },
+                headlineContent = { Text("Yedekten geri yükle") },
+                supportingContent = { Text("\"SubMüzik yedek\" klasörünü seç; olan şarkılar atlanır") },
+            )
+        }
+
         Section("Güncelleme") {
             ListItem(
                 colors = transparentRow(),
@@ -191,13 +217,6 @@ fun SettingsScreen(
                 modifier = Modifier.clickable(onClick = onCheckUpdate),
                 leadingContent = { Icon(Icons.Default.SystemUpdate, null) },
                 headlineContent = { Text("Güncellemeleri denetle") },
-            )
-            ListItem(
-                colors = transparentRow(),
-                modifier = Modifier.clickable(onClick = onToken),
-                leadingContent = { Icon(Icons.Default.Key, null) },
-                headlineContent = { Text("GitHub token") },
-                supportingContent = { Text("Gizli repodan güncelleme almak için") },
             )
             ListItem(
                 colors = transparentRow(),

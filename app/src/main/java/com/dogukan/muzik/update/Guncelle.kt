@@ -63,13 +63,15 @@ object Guncelle {
         val repo = BuildConfig.REPO
         if (repo.isEmpty()) throw IOException("Depo adı bilinmiyor (GitHub dışında derlenmiş)")
         val tok = token(c)
-        if (tok.isEmpty()) throw IOException("Önce ⋮ → GitHub token menüsünden token'ı gir")
         val conn = ac("https://api.github.com/repos/$repo/releases/latest", tok, "application/vnd.github+json")
         try {
             when (val code = conn.responseCode) {
                 200 -> Unit
                 401 -> throw IOException("Token geçersiz ya da süresi dolmuş")
-                403, 404 -> throw IOException("Sürüm bulunamadı ya da token'ın bu repoya izni yok")
+                403, 404 -> throw IOException(
+                    if (tok.isEmpty()) "Sürüm bulunamadı. Repo gizliyse herkese açık (public) yapınca güncellemeler çalışır."
+                    else "Sürüm bulunamadı ya da token'ın bu repoya izni yok"
+                )
                 else -> throw IOException("GitHub hatası: HTTP $code")
             }
             val j = JSONObject(conn.inputStream.bufferedReader().readText())

@@ -141,7 +141,6 @@ fun App(
 
     var showAdd by remember { mutableStateOf(false) }
     var addInitial by remember { mutableStateOf("") }
-    var showToken by remember { mutableStateOf(false) }
     var showBulk by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { vm.repo.notices.collect { notice = it } }
@@ -268,7 +267,8 @@ fun App(
                         onTema = onTema,
                         version = vm.currentVersion,
                         onCheckUpdate = { vm.checkUpdate(manual = true, onMessage = toast) },
-                        onToken = { showToken = true },
+                        onExportBackup = { vm.repo.exportBackup(it); tab = 0 },
+                        onImportBackup = { vm.repo.importBackup(it); tab = 0 },
                         onUpdateDownloader = vm.repo::updateYtDlp,
                         spotifyBagli = spotifyBagli,
                         spotifyClientId = com.dogukan.muzik.data.SpotifyApi.clientId(ctx),
@@ -322,29 +322,6 @@ fun App(
                     }
                 )
             },
-        )
-    }
-
-    if (showToken) {
-        var tok by remember { mutableStateOf(vm.token()) }
-        AlertDialog(
-            onDismissRequest = { showToken = false },
-            title = { Text("GitHub token") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Gizli SubPlay reposundan güncelleme almak için salt-okunur (Contents: Read) bir token yapıştır.",
-                        style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(tok, { tok = it }, label = { Text("github_pat_…") }, singleLine = true,
-                        modifier = Modifier.fillMaxWidth())
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.setToken(tok); showToken = false
-                    vm.checkUpdate(manual = true, onMessage = toast)
-                }) { Text("Kaydet") }
-            },
-            dismissButton = { TextButton(onClick = { showToken = false }) { Text("Vazgeç") } },
         )
     }
 

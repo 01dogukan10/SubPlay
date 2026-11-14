@@ -521,6 +521,131 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
+    // ---------------- Yedek / taşıma ----------------
+
+    private val YEDEK_KLASORU = "SubMüzik yedek"
+
+    private fun copyToTree(src: File, dir: androidx.documentfile.provider.DocumentFile,
+                           existing: Map<String?, androidx.documentfile.provider.DocumentFile>) {
+        if (!src.exists()) return
+        val old = existing[src.name]
+        if (old != null && old.length() == src.length()) return // zaten var
+        old?.delete()
+        val f = dir.createFile("application/octet-stream", src.name) ?: throw IOException("${src.name} yazılamadı")
+        ctx.contentResolver.openOutputStream(f.uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
+    }
+
+    /** Seçilen klasörün içine "SubMüzik yedek" oluşturup şarkıları, kapakları, kütüphaneyi ve listeleri yazar. */
+    fun exportBackup(tree: android.net.Uri) {
+        val id = newTask("yedek", "Yedekleniyor…")
+        scope.launch {
+            try {
+                val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: throw IOException("Klasör açılamadı")
+                val dir = root.findFile(YEDEK_KLASORU)?.takeIf { it.isDirectory } ?: root.createDirectory(YEDEK_KLASORU)
+                    ?: throw IOException("Yedek klasörü oluşturulamadı")
+                val songs = dir.findFile("sarkilar") ?: dir.createDirectory("sarkilar") ?: throw IOException("Klasör oluşturulamadı")
+                val covers = dir.findFile("kapaklar") ?: dir.createDirectory("kapaklar") ?: throw IOException("Klasör oluşturulamadı")
+                val haveSongs = songs.listFiles().associateBy { it.name }
+                val haveCovers = covers.listFiles().associateBy { it.name }
+
+                val tracks = _tracks.value
+                val pls = _playlists.value
+                tracks.forEachIndexed { i, t ->
+                    updateTask(id) { it.copy(name = "Yedekleniyor (${i + 1}/${tracks.size})", progress = (i + 1f) / tracks.size) }
+                    copyToTree(fileOf(t), songs, haveSongs)
+                    coverOf(t)?.let { copyToTree(it, covers, haveCovers) }
+                }
+                pls.forEach { p -> playlistCover(p)?.let { copyToTree(it, covers, haveCovers) } }
+
+                val json = JSONObject()
+                    .put("surum", 1)
+                    .put("tarih", System.currentTimeMillis())
+                    .put("kutuphane", JSONArray(libFile.takeIf { it.exists() }?.readText() ?: "[]"))
+                    .put("listeler", JSONArray(plFile.takeIf { it.exists() }?.readText() ?: "[]"))
+                dir.findFile("yedek.json")?.delete()
+                val jf = dir.createFile("application/octet-stream", "yedek.json") ?: throw IOException("yedek.json yazılamadı")
+                ctx.contentResolver.openOutputStream(jf.uri)!!.use { it.write(json.toString().toByteArray()) }
+
+                removeTask(id)
+                _notices.tryEmit(
+                    "Yedek hazır: ${tracks.size} şarkı, ${pls.size} liste.\n\n" +
+                        "Seçtiğin klasörde \"$YEDEK_KLASORU\" adıyla duruyor. Yeni uygulamada Ayarlar → Yedekten geri yükle ile bu klasörü seç."
+                )
+            } catch (e: Exception) {
+                fail(id, e) { exportBackup(tree) }
+            }
+        }
+    }
+
+    /** "SubMüzik yedek" klasöründen (ya da onu içeren klasörden) her şeyi geri yükler; var olanlar atlanır. */
+    fun importBackup(tree: android.net.Uri) {
+        val id = newTask("geri-yukle", "Yedek okunuyor…")
+        scope.launch {
+            try {
+                val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: throw IOException("Klasör açılamadı")
+                val dir = if (root.findFile("yedek.json") != null) root
+                else root.findFile(YEDEK_KLASORU) ?: throw IOException("Seçilen klasörde SubMüzik yedeği yok. \"$YEDEK_KLASORU\" klasörünü seç.")
+                val jf = dir.findFile("yedek.json") ?: throw IOException("yedek.json bulunamadı")
+                val json = JSONObject(ctx.contentResolver.openInputStream(jf.uri)!!.bufferedReader().use { it.readText() })
+                val songs = dir.findFile("sarkilar")?.listFiles()?.associateBy { it.name }.orEmpty()
+                val covers = dir.findFile("kapaklar")?.listFiles()?.associateBy { it.name }.orEmpty()
+
+                fun copyIn(src: androidx.documentfile.provider.DocumentFile, dst: File) {
+                    ctx.contentResolver.openInputStream(src.uri)!!.use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
+                }
+
+                val lib = json.optJSONArray("kutuphane") ?: JSONArray()
+                val haveIds = _tracks.value.map { it.id }.toSet()
+                val added = mutableListOf<Track>()
+                for (i in 0 until lib.length()) {
+                    updateTask(id) { it.copy(name = "Geri yükleniyor (${i + 1}/${lib.length()})", progress = (i + 1f) / lib.length()) }
+                    val o = lib.optJSONObject(i) ?: continue
+                    val tid = o.optString("id")
+                    if (tid.isBlank() || tid in haveIds) continue
+                    val name = o.optString("fileName")
+                    val src = songs[name] ?: continue
+                    var target = File(musicDir, name)
+                    if (target.exists() && target.length() != src.length()) {
+                        target = uniqueFile(name.substringBeforeLast('.'), name.substringAfterLast('.', "m4a"))
+                    }
+                    if (!target.exists()) copyIn(src, target)
+                    val coverName = o.optString("cover").ifBlank { null }
+                    coverName?.let { cn -> covers[cn]?.let { c -> File(coversDir, cn).takeIf { !it.exists() }?.let { copyIn(c, it) } } }
+                    added += Track(tid, o.optString("title"), o.optString("artist"), target.name,
+                        o.optString("sourceUrl"), o.optLong("addedAt"), coverName)
+                }
+
+                val pls = json.optJSONArray("listeler") ?: JSONArray()
+                var plCount = 0
+                synchronized(lock) {
+                    _tracks.value = (_tracks.value + added).sortedByDescending { it.addedAt }
+                    saveTracks()
+                    val current = _playlists.value.toMutableList()
+                    for (i in 0 until pls.length()) {
+                        val o = pls.optJSONObject(i) ?: continue
+                        val ids = o.optJSONArray("trackIds")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+                        val cover = o.optString("cover").ifBlank { null }
+                        cover?.let { cn -> covers[cn]?.let { c -> File(coversDir, cn).takeIf { !it.exists() }?.let { copyIn(c, it) } } }
+                        val idx = current.indexOfFirst { it.id == o.optString("id") }
+                        if (idx >= 0) {
+                            val p = current[idx]
+                            current[idx] = p.copy(trackIds = p.trackIds + ids.filterNot { it in p.trackIds }, cover = p.cover ?: cover)
+                        } else {
+                            current += Playlist(o.optString("id"), o.optString("name"), ids, cover)
+                            plCount++
+                        }
+                    }
+                    _playlists.value = current
+                    savePlaylists()
+                }
+                removeTask(id)
+                _notices.tryEmit("Geri yükleme tamam: ${added.size} şarkı ve $plCount liste eklendi. Zaten olanlar atlandı.")
+            } catch (e: Exception) {
+                fail(id, e) { importBackup(tree) }
+            }
+        }
+    }
+
     // ---------------- Spotify ----------------
 
     private var loginServer: java.net.ServerSocket? = null
