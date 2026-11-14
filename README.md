@@ -44,6 +44,11 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - Alttaki küçük oynatıcıya dokununca **büyük oynatıcı** açılır. Aşağı kaydırarak kapatırsın.
 - **Tümünü çal** ve **Karışık çal** düğmeleri kütüphanenin ve listelerin üstündedir.
 
+- **Şarkı sözleri:** büyük oynatıcıdaki "Şarkı sözleri" düğmesi. Zamanlı sözlerde çalan satır vurgulanır, satıra dokununca şarkı oraya gider.
+- **Uyku zamanlayıcısı:** büyük oynatıcıda ⏾. Belirli bir süre sonra ya da şarkı bitince müzik yavaşça durur.
+- **Beğen (♥):** beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
+- **Yumuşak geçiş:** Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
+
 ### Kütüphane ve listeler
 - **Arama:** üstteki kutuya şarkı ya da sanatçı adı yaz.
 - **Sıralama:** şarkı sayısının yanındaki ⇅ ile isme, sanatçıya ya da eklenme tarihine göre sırala.
@@ -52,6 +57,11 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - **İndirmeden eklemek:** şarkı eklerken "Telefona indir" anahtarını kapatırsan şarkı sadece kütüphaneye eklenir, çalınca internetten gelir. İndirilmiş şarkıların yanında renkli ↓ işareti olur.
 - **Silmek:** şarkının ⋮ menüsünde "Telefondan sil" sadece dosyayı siler (şarkı kütüphanede kalır, internetten çalar); "Kütüphaneden kaldır" şarkıyı tamamen kaldırır.
 - **Liste düzenlemek:** listeyi aç, sağ üstteki ✏️'ye bas. Adını değiştirebilir, şarkı ekleyip çıkarabilir, ▲▼ ile sırayı değiştirebilir ve galeriden kapak resmi seçebilirsin.
+
+### Akıllı listeler ve istatistikler
+- Listeler sekmesinin üstünde **En çok dinlediklerim**, **Son eklenenler** ve **Uzun süredir dinlemediklerin** kendiliğinden güncellenir.
+- **İstatistikler:** ne kadar müzik dinlediğin, en çok dinlediğin şarkılar ve sanatçılar, günlük grafik.
+- **Sadece Wi-Fi'de indir:** Ayarlar'dan açılırsa mobil veride indirme yapılmaz.
 
 ### Paylaşmak
 Paylaş simgesine basınca iki seçenek çıkar:
