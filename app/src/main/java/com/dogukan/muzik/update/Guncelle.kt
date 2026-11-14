@@ -28,7 +28,23 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
 
-data class Surum(val kod: Int, val ad: String, val assetUrl: String, val not: String)
+/** etiket: "1.15.1" gibi sürüm numarası. */
+data class Surum(val etiket: String, val ad: String, val assetUrl: String, val not: String)
+
+/** "1.15.1" -> [1, 15, 1]. Eski tek sayılı sürümler ("31") en eski sayılır. */
+private fun parcala(s: String): List<Int> {
+    val p = s.trim().removePrefix("v").removePrefix("Sürüm ").split('.').map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+    return if (p.size < 3) listOf(0, 0, 0) else p
+}
+
+private fun daha_yeni(a: String, b: String): Boolean {
+    val x = parcala(a); val y = parcala(b)
+    for (i in 0 until maxOf(x.size, y.size)) {
+        val d = (x.getOrElse(i) { 0 }) - (y.getOrElse(i) { 0 })
+        if (d != 0) return d > 0
+    }
+    return false
+}
 
 /** Gizli GitHub reposunun Releases'ından token ile sürüm kontrolü, indirme ve kurulum. */
 object Guncelle {
@@ -38,15 +54,10 @@ object Guncelle {
     fun token(c: Context): String = prefs(c).getString("gh_token", "").orEmpty()
     fun setToken(c: Context, t: String) = prefs(c).edit().putString("gh_token", t.trim()).apply()
 
-    fun mevcutAd(c: Context): String = "Sürüm " + (c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "?")
+    private fun mevcutNo(c: Context): String = c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "0"
+    fun mevcutAd(c: Context): String = "Sürüm " + mevcutNo(c)
 
-    private fun mevcutKod(c: Context): Long {
-        val p = c.packageManager.getPackageInfo(c.packageName, 0)
-        @Suppress("DEPRECATION")
-        return if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()
-    }
-
-    fun yeniMi(c: Context, s: Surum) = TABAN + s.kod > mevcutKod(c)
+    fun yeniMi(c: Context, s: Surum) = daha_yeni(s.etiket, mevcutNo(c))
 
     private fun ac(url: String, token: String, accept: String) =
         (URL(url).openConnection() as HttpURLConnection).apply {
@@ -75,7 +86,7 @@ object Guncelle {
                 else -> throw IOException("GitHub hatası: HTTP $code")
             }
             val j = JSONObject(conn.inputStream.bufferedReader().readText())
-            val kod = j.getString("tag_name").filter { it.isDigit() }.toIntOrNull() ?: return null
+            val etiket = j.getString("tag_name").removePrefix("v")
             val a = j.getJSONArray("assets")
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
@@ -84,7 +95,7 @@ object Guncelle {
                     val not = j.optString("body", "").lines()
                         .filterNot { it.startsWith("Co-Authored-By") || it.startsWith("Claude-Session") }
                         .joinToString("\n").trim()
-                    return Surum(kod, j.optString("name", "v$kod"), o.getString("url"), not)
+                    return Surum(etiket, j.optString("name", "Sürüm $etiket"), o.getString("url"), not)
                 }
             }
             return null
@@ -168,8 +179,8 @@ object Guncelle {
         WorkManager.getInstance(c).enqueueUniquePeriodicWork("guncelle", ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
-    internal fun bildirilen(c: Context) = prefs(c).getInt("bildirilen", 0)
-    internal fun setBildirilen(c: Context, kod: Int) = prefs(c).edit().putInt("bildirilen", kod).apply()
+    internal fun bildirilen(c: Context) = prefs(c).getString("bildirilen_surum", "").orEmpty()
+    internal fun setBildirilen(c: Context, etiket: String) = prefs(c).edit().putString("bildirilen_surum", etiket).apply()
 }
 
 /** Saat başı arka planda bakar; yeni sürüm varsa bildirim gösterir. */
@@ -178,8 +189,8 @@ class GuncelleIsci(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) 
         try {
             val c = applicationContext
             val s = withContext(Dispatchers.IO) { Guncelle.sonSurum(c) } ?: return Result.success()
-            if (Guncelle.yeniMi(c, s) && Guncelle.bildirilen(c) != s.kod) {
-                Guncelle.setBildirilen(c, s.kod)
+            if (Guncelle.yeniMi(c, s) && Guncelle.bildirilen(c) != s.etiket) {
+                Guncelle.setBildirilen(c, s.etiket)
                 Guncelle.bildir(c, s)
             }
         } catch (_: Exception) { }

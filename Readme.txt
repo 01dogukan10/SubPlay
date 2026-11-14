@@ -100,7 +100,8 @@ Geliştiriciler için
 
 - Kotlin, Jetpack Compose, Media3 (ExoPlayer), yt-dlp (youtubedl-android).
 - main dalına her push'ta GitHub Actions APK'yı derler, KEYSTORE_B64 ve KEYSTORE_PASS secret'larıyla imzalar ve
-  Releases'a "Sürüm N" olarak yükler. Sürüm notu commit mesajından alınır. Commit mesajına [skip ci] yazılırsa derleme yapılmaz.
+  Releases'a "Sürüm 1.X.Y" olarak yükler. Sürüm notu commit mesajından alınır. Commit mesajına [skip ci] yazılırsa derleme yapılmaz.
+- Sürüm numarası surum.txt dosyasında: 1.ORTA.SON. Yeni özellik eklenince ORTA bir artar ve SON sıfırlanır; hata düzeltmesi, görünüm ya da küçük değişikliklerde SON bir artar.
 - Kod yapısı:
   
   app/src/main/java/com/dogukan/muzik/
