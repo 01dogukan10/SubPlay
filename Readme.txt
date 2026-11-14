@@ -89,10 +89,30 @@ KOD YAPISI
                              arama, kütüphane ve listeler (JSON)
     player/PlaybackService.kt  Arka planda çalma (Media3 MediaSessionService)
     update/Guncelle.kt       GitHub Releases'tan güncelleme + saatlik kontrol
+    download/DownloadService.kt  İndirme sürerken uygulamayı ayakta tutan servis
     ui/App.kt                Ana ekranlar ve diyaloglar
     ui/Player.kt             Mini ve tam ekran oynatıcı
     ui/Settings.kt           Ayarlar ekranı
     ui/Theme.kt              Tema, renkler, neon efekti, kapak bileşeni
+
+
+SÜRÜM 9 DÜZELTMELERİ
+--------------------
+
+  1. Ekran kapalıyken müzik artık durmuyor (oynatıcı telefonu uyanık tutuyor).
+  2. Uygulamadan çıkınca indirmeler yarıda kalmıyor; indirme sürerken
+     "N şarkı indiriliyor" bildirimi çıkıyor ve iş bitince kayboluyor.
+  3. Kütüphaneden ya da listeden şarkıya dokununca karışık mod artık kapanmıyor.
+  4. Kurulmuş güncelleme APK'sı (~43 MB) ve yarım kalan indirme dosyaları
+     açılışta siliniyor.
+  5. Aynı şarkı inerken tekrar eklenirse ikinci kez inmiyor
+     (listesi varsa şarkı bitince oraya da ekleniyor).
+  6. Hata veren indirmelerde "Tekrar dene" düğmesi var.
+  7. Yatay ekranda tam ekran oynatıcı taşmıyor (kapak solda, kontroller sağda).
+  8. Bildirim izni sadece bir kez soruluyor.
+  9. Çalan şarkının adı düzenlenince bildirim ve oynatıcı da yeni adı gösteriyor.
+ 10. Toplu eklemede doğru mesaj: liste okunamadı / hepsi zaten var /
+     kaç tanesi indiriliyor.
 
 
 NOT
