@@ -14,7 +14,7 @@ android {
         targetSdk = 34
         val yapi = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionCode = 100 + yapi
-        versionName = "1.0.$yapi"
+        versionName = "$yapi" // ekranda "Sürüm N" olarak görünür (Releases ile aynı)
         buildConfigField("String", "REPO", "\"${System.getenv("GITHUB_REPOSITORY") ?: ""}\"")
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

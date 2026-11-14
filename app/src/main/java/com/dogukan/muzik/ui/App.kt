@@ -143,8 +143,8 @@ fun App(
     var showAdd by remember { mutableStateOf(false) }
     var addInitial by remember { mutableStateOf("") }
     var showBulk by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { vm.repo.notices.collect { notice = it } }
+    var notices by remember { mutableStateOf(listOf<String>()) }
+    LaunchedEffect(Unit) { vm.repo.notices.collect { notices = notices + it } }
     var bulkInitial by remember { mutableStateOf("") }
     var pickPlaylistFor by remember { mutableStateOf<List<Track>?>(null) }
     var confirmDelete by remember { mutableStateOf<List<Track>?>(null) }
@@ -233,6 +233,8 @@ fun App(
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
                         onDismissDownload = vm.repo::dismissDownload,
                         onRetryDownload = vm.repo::retryDownload,
+                        onRetryAll = vm.repo::retryAllFailed,
+                        onDismissAll = vm.repo::dismissAllFailed,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
                         fileOf = vm.repo::fileOf,
@@ -329,10 +331,11 @@ fun App(
     update.surum?.let { s ->
         AlertDialog(
             onDismissRequest = { if (!update.downloading) vm.dismissUpdate() },
-            title = { Text("Yeni sürüm: ${s.ad}") },
+            title = { Text("Yeni sürüm var") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Şu anki sürüm: ${vm.currentVersion}")
+                    Text("${vm.currentVersion}  →  ${s.ad}", style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold)
                     if (s.not.isNotBlank()) {
                         Text("Yenilikler", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         Text(
@@ -360,12 +363,12 @@ fun App(
         )
     }
 
-    notice?.let { msg ->
+    notices.firstOrNull()?.let { msg ->
         AlertDialog(
-            onDismissRequest = { notice = null },
+            onDismissRequest = { notices = notices.drop(1) },
             title = { Text("Bilgi") },
             text = { Text(msg) },
-            confirmButton = { TextButton(onClick = { notice = null }) { Text("Tamam") } },
+            confirmButton = { TextButton(onClick = { notices = notices.drop(1) }) { Text("Tamam") } },
         )
     }
 
@@ -428,6 +431,8 @@ private fun LibraryScreen(
     onPlay: (List<Track>, Int, Boolean?) -> Unit,
     onDismissDownload: (String) -> Unit,
     onRetryDownload: (String) -> Unit,
+    onRetryAll: () -> Unit,
+    onDismissAll: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
@@ -438,6 +443,9 @@ private fun LibraryScreen(
     val listState = rememberLazyListState()
     val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
+    // Çok indirme varsa tek satırda özetle
+    val collapse = downloads.size > 3
+    var showAllDownloads by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     val selecting = selected.isNotEmpty()
     BackHandler(enabled = selecting) { selected = emptySet() }
@@ -514,7 +522,14 @@ private fun LibraryScreen(
         }
         Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
-            items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload, onRetryDownload) }
+            if (collapse) {
+                item(key = "indirme-ozet") {
+                    DownloadSummary(downloads, showAllDownloads, { showAllDownloads = !showAllDownloads }, onRetryAll, onDismissAll)
+                }
+            }
+            if (!collapse || showAllDownloads) {
+                items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload, onRetryDownload) }
+            }
             if (filtered.isEmpty() && downloads.isEmpty()) {
                 item {
                     EmptyState(
@@ -532,7 +547,8 @@ private fun LibraryScreen(
             }
             item { Spacer(Modifier.height(88.dp)) }
         }
-        val offset = downloads.size + if (filtered.isEmpty() && downloads.isEmpty()) 1 else 0
+        val offset = (if (collapse) 1 else 0) + (if (!collapse || showAllDownloads) downloads.size else 0) +
+            (if (filtered.isEmpty() && downloads.isEmpty()) 1 else 0)
         FastScroller(listState, Modifier.align(Alignment.TopEnd)) { idx ->
             filtered.getOrNull(idx - offset)?.let { scrollLabel(it, sira, idx - offset) }
         }
@@ -555,6 +571,56 @@ private fun EmptyState(text: String) {
         Spacer(Modifier.height(16.dp))
         Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+@Composable
+private fun DownloadSummary(
+    downloads: List<DownloadTask>,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onRetryAll: () -> Unit,
+    onDismissAll: () -> Unit,
+) {
+    val c = MaterialTheme.colorScheme
+    val failed = downloads.count { it.error != null }
+    val running = downloads.count { it.error == null && (it.progress ?: 0f) > 0f }
+    val waiting = downloads.size - failed - running
+    val active = downloads.filter { it.error == null && it.progress != null }
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .background(c.surfaceVariant.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onToggle).padding(14.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Download, null, tint = c.primary)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    buildString {
+                        if (running > 0) append("$running iniyor")
+                        if (waiting > 0) { if (isNotEmpty()) append(" · "); append("$waiting sırada") }
+                        if (failed > 0) { if (isNotEmpty()) append(" · "); append("$failed hata") }
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(if (expanded) "Gizlemek için dokun" else "Ayrıntılar için dokun",
+                    style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+            }
+            Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null)
+        }
+        if (active.isNotEmpty()) {
+            val avg = active.mapNotNull { it.progress }.average().toFloat()
+            LinearProgressIndicator(progress = { avg }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+        }
+        if (failed > 0) {
+            Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRetryAll) {
+                    Icon(Icons.Default.Refresh, null); Spacer(Modifier.width(4.dp)); Text("Hatalıları tekrar dene")
+                }
+                TextButton(onClick = onDismissAll) { Text("Hatalıları temizle") }
+            }
+        }
     }
 }
 

@@ -143,17 +143,49 @@ class MusicRepository private constructor(private val ctx: Context) {
         list.find { it.sourceUrl == source }?.let { return it }
         ytId(source)?.let { id -> list.find { ytId(it.sourceUrl) == id }?.let { return it } }
         val t = title?.let(::norm)?.takeIf { it.isNotEmpty() } ?: return null
-        val a = artist?.let(::norm).orEmpty()
+        // Sanatçı bilinmiyorsa sadece isimden "aynı şarkı" demek yanlış olur (farklı sanatçıların aynı adlı şarkıları)
+        val a = artist?.let(::norm)?.takeIf { it.isNotEmpty() } ?: return null
         return list.find { tr ->
-            norm(tr.title) == t && (a.isEmpty() || norm(tr.artist).let { it == a || it.contains(a) || a.contains(it) && it.isNotEmpty() })
+            norm(tr.title) == t && norm(tr.artist).let { ta ->
+                ta == a || (ta.length >= 3 && a.length >= 3 && (ta.contains(a) || a.contains(ta)))
+            }
         }
     }
 
     /** Hata veren indirmeleri yeniden başlatmak için. */
     private val retries = ConcurrentHashMap<String, () -> Unit>()
 
-    /** Aynı kaynak inerken ikinci kez istenirse, bitince eklenecek listeler. */
-    private val pendingPlaylists = ConcurrentHashMap<String, MutableSet<String>>()
+    /** Aynı kaynak inerken ikinci kez istenirse, bitince eklenecek listeler (liste id -> sıra). */
+    private val pendingPlaylists = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+
+    /** İçe aktarılan listelerde her şarkının olması gereken sıra (liste id -> şarkı id -> sıra). */
+    private val plannedOrder = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+
+    /**
+     * Şarkıyı listeye, içe aktarılan listedeki sırasına göre yerleştirir.
+     * Şarkılar hangi sırayla inerse insin liste orijinal sırasında kalır.
+     */
+    private fun placeInPlaylist(playlistId: String, trackId: String, order: Int?) {
+        if (order == null) { addToPlaylist(playlistId, trackId); return }
+        synchronized(lock) {
+            val plan = plannedOrder.getOrPut(playlistId) { ConcurrentHashMap() }
+            plan[trackId] = order
+            _playlists.value = _playlists.value.map { p ->
+                if (p.id != playlistId || trackId in p.trackIds) return@map p
+                val pos = p.trackIds.indexOfLast { id -> plan[id]?.let { it < order } == true } + 1
+                val list = p.trackIds.toMutableList()
+                // Önceki sırada şarkı yoksa: planlı şarkıların başına, eski şarkıların sonrasına koy
+                val at = if (pos > 0) pos else (p.trackIds.indexOfFirst { plan.containsKey(it) }.takeIf { it >= 0 } ?: list.size)
+                list.add(at, trackId)
+                p.copy(trackIds = list)
+            }
+            savePlaylists()
+        }
+    }
+
+    /** Var olan listeyi adıyla bulur ya da yenisini açar (aynı link ikinci kez yapıştırılınca ikinci liste açılmasın). */
+    private fun playlistByName(name: String): String =
+        _playlists.value.find { it.name.equals(name, ignoreCase = true) }?.id ?: createPlaylist(name)
 
     init {
         SpotifyApi.init(ctx)
@@ -231,25 +263,21 @@ class MusicRepository private constructor(private val ctx: Context) {
             _playlists.value.find { it.name.equals(name, ignoreCase = true) }?.id ?: createPlaylist(name)
         }
         var count = 0
-        ytLinks.forEach { if (enqueueYt(it, null, null, plId, it)) count++ }
-        if (spotifyLinks.isNotEmpty()) importSpotifyLinks(spotifyLinks, plId)
-        val already = _tracks.value.map { it.sourceUrl }.toSet()
+        var order = 0
+        ytLinks.forEach { if (enqueueYt(it, null, null, plId, it, order = order++)) count++ }
+        if (spotifyLinks.isNotEmpty()) importSpotifyLinks(spotifyLinks, plId, startOrder = order)
+        order += spotifyLinks.size * 1000 // Spotify linklerinden sonra gelsinler
         for ((artist, title) in items) {
             val label = if (artist.isBlank()) title else "$artist - $title"
             val query = "ytsearch1:$label audio"
-            if (query in already) {
-                // Zaten indirilmiş: sadece listeye ekle
-                if (plId != null) _tracks.value.find { it.sourceUrl == query }?.let { addToPlaylist(plId, it.id) }
-                continue
-            }
-            if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label)) count++
+            if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label, order = order++)) count++
         }
         // Spotify linkleri arka planda tek tek okunur; sayıları sonra ayrıca bildirilir
         return BulkResult(total, count + spotifyLinks.size)
     }
 
     /** Kopyalanan Spotify şarkı linklerini sırayla okuyup indirme kuyruğuna ekler. */
-    private fun importSpotifyLinks(links: List<String>, plId: String?) {
+    private fun importSpotifyLinks(links: List<String>, plId: String?, startOrder: Int = 0) {
         val id = newTask(links.first(), "Spotify linkleri okunuyor (0/${links.size})")
         scope.launch {
             var added = 0; var skipped = 0; var failed = 0
@@ -257,9 +285,10 @@ class MusicRepository private constructor(private val ctx: Context) {
                 updateTask(id) { it.copy(name = "Spotify linkleri okunuyor (${i + 1}/${links.size})", progress = (i + 1f) / links.size) }
                 try {
                     val (_, items, cover) = resolveSpotify(link)
-                    items.forEach { (title, artist) ->
+                    items.forEachIndexed { j, (title, artist) ->
                         val label = if (artist.isBlank()) title else "$artist - $title"
-                        if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)) added++ else skipped++
+                        val ord = startOrder + i * 1000 + j
+                        if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, ord)) added++ else skipped++
                     }
                 } catch (e: Exception) {
                     failed++
@@ -295,11 +324,15 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
 
         val junk = Regex("^(\\d+[.)\\-:]\\s*|[-*•·▶►]+\\s*)")
+        // "Şarkı - Remastered 2011", "Şarkı - Live" gibi ekler sanatçı-şarkı ayrımı sayılmaz
+        val versionTag = Regex("^(\\d{4}\\b|(remaster(ed)?|live|radio edit|single version|album version|mono|stereo|demo|acoustic|instrumental|bonus track|remix|edit)\\b)", RegexOption.IGNORE_CASE)
         return lines.map { l ->
             val clean = l.replace(junk, "").trim()
-            val sep = listOf(" - ", " – ", " — ", " by ").firstOrNull { clean.contains(it) }
-            if (sep == null) "" to clean
-            else clean.substringBefore(sep).trim() to clean.substringAfter(sep).trim()
+            val sep = listOf(" - ", " – ", " — ").firstOrNull { clean.contains(it) }
+            if (sep == null) return@map "" to clean
+            val left = clean.substringBefore(sep).trim()
+            val right = clean.substringAfter(sep).trim()
+            if (versionTag.containsMatchIn(right)) "" to clean else left to right
         }.filter { it.second.isNotEmpty() }.distinct()
     }
 
@@ -337,6 +370,9 @@ class MusicRepository private constructor(private val ctx: Context) {
         retries[id] = retry
         updateTask(id) { it.copy(error = friendly(e)) }
     }
+
+    fun retryAllFailed() = _downloads.value.filter { it.error != null }.forEach { retryDownload(it.id) }
+    fun dismissAllFailed() = _downloads.value.filter { it.error != null }.forEach { dismissDownload(it.id) }
 
     fun retryDownload(id: String) {
         val r = retries.remove(id) ?: return
@@ -424,16 +460,17 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun enqueueYt(
         source: String, title: String?, artist: String?, playlistId: String?, label: String,
         coverUrl: String? = null,
+        order: Int? = null,
     ): Boolean {
-        // Zaten indirilmişse tekrar indirme; sadece listeye ekle
+        // Zaten indirilmişse tekrar indirme; sadece listeye (doğru sırasına) ekle
         findExisting(source, title, artist)?.let { t ->
-            if (playlistId != null) addToPlaylist(playlistId, t.id)
+            if (playlistId != null) placeInPlaylist(playlistId, t.id, order)
             return false
         }
         // Aynı şarkı zaten iniyorsa ikinci kez indirme; sadece listesini not et
         val inFlight = synchronized(lock) { _downloads.value.any { it.url == source && it.error == null } }
         if (inFlight) {
-            if (playlistId != null) pendingPlaylists.getOrPut(source) { ConcurrentHashMap.newKeySet() }.add(playlistId)
+            if (playlistId != null) pendingPlaylists.getOrPut(source) { ConcurrentHashMap() }[playlistId] = order ?: Int.MAX_VALUE
             return false
         }
         val id = newTask(source, label)
@@ -442,12 +479,14 @@ class MusicRepository private constructor(private val ctx: Context) {
                 ytSlots.withPermit {
                     ensureYt()
                     val t = ytDownload(id, source, title, artist, coverUrl)
-                    if (playlistId != null) addToPlaylist(playlistId, t.id)
-                    pendingPlaylists.remove(source)?.forEach { addToPlaylist(it, t.id) }
+                    if (playlistId != null) placeInPlaylist(playlistId, t.id, order)
+                    pendingPlaylists.remove(source)?.forEach { (pl, ord) ->
+                        placeInPlaylist(pl, t.id, ord.takeIf { it != Int.MAX_VALUE })
+                    }
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                fail(id, e) { enqueueYt(source, title, artist, playlistId, label, coverUrl) }
+                fail(id, e) { enqueueYt(source, title, artist, playlistId, label, coverUrl, order) }
             }
         }
         return true
@@ -477,14 +516,26 @@ class MusicRepository private constructor(private val ctx: Context) {
             val ytUploader = part(1)?.removeSuffix(" - Topic")
             val ytThumb = part(2)
 
-            val finalTitle = title?.takeIf { it.isNotBlank() } ?: ytTitle ?: "Şarkı"
+            // Başlık/sanatçı verilmediyse YouTube başlığını temizle: "Sanatçı - Şarkı (Official Video)" -> ayrı ayrı
+            var cleanTitle = ytTitle?.let(::temizBaslik)
+            var cleanArtist = ytUploader?.let(::temizKanal)
+            val ct = cleanTitle
+            if (title.isNullOrBlank() && ct != null) {
+                val sep = listOf(" - ", " – ", " — ").firstOrNull { ct.contains(it) }
+                if (sep != null) {
+                    val l = ct.substringBefore(sep).trim()
+                    val r = ct.substringAfter(sep).trim()
+                    if (l.isNotEmpty() && r.isNotEmpty()) { cleanArtist = l; cleanTitle = r }
+                }
+            }
+            val finalTitle = title?.takeIf { it.isNotBlank() } ?: cleanTitle?.ifBlank { null } ?: ytTitle ?: "Şarkı"
             val target = uniqueFile(sanitize(finalTitle).ifBlank { "sarki" }, f.extension.ifBlank { "m4a" })
             f.copyTo(target)
             val newId = UUID.randomUUID().toString()
             val track = Track(
                 id = newId,
                 title = finalTitle,
-                artist = artist?.takeIf { it.isNotBlank() } ?: ytUploader.orEmpty(),
+                artist = artist?.takeIf { it.isNotBlank() } ?: cleanArtist.orEmpty(),
                 fileName = target.name,
                 sourceUrl = source,
                 addedAt = System.currentTimeMillis(),
@@ -497,6 +548,20 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
+    /** "(Official Video)", "[Lyrics]", "| Official Audio" gibi ekleri atar. */
+    private fun temizBaslik(s: String): String {
+        val tag = "official|video|audio|lyrics?|lyric|visuali[sz]er|music|hd|hq|4k|klip|resmi|sözleri|şarkı sözleri|mv|m/v|clip|oficial|videoclip"
+        return s
+            .replace(Regex("\\s*[(\\[]([^)\\]]*\\b($tag)\\b[^)\\]]*)[)\\]]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s*[|｜].*\\b($tag)\\b.*$", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim().trimEnd('-', '–', '—', '|').trim()
+    }
+
+    /** Kanal adından "VEVO", "- Topic", "Official" eklerini atar. */
+    private fun temizKanal(s: String): String =
+        s.removeSuffix(" - Topic").replace(Regex("(?i)\\s*vevo$"), "").replace(Regex("(?i)\\s*official$"), "").trim()
+
     private fun expandYtPlaylist(url: String) {
         val id = newTask(url, "YouTube listesi okunuyor…")
         scope.launch {
@@ -507,12 +572,12 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val root = JSONObject(out.substring(out.indexOf('{')))
                 val entries = root.optJSONArray("entries") ?: JSONArray()
                 if (entries.length() == 0) throw IOException("Listede şarkı bulunamadı")
-                val plId = createPlaylist(root.optString("title").ifBlank { "YouTube listesi" })
+                val plId = playlistByName(root.optString("title").ifBlank { "YouTube listesi" })
                 for (i in 0 until entries.length()) {
                     val e = entries.optJSONObject(i) ?: continue
                     val vid = e.optString("id")
                     if (vid.isBlank()) continue
-                    enqueueYt("https://www.youtube.com/watch?v=$vid", null, null, plId, e.optString("title").ifBlank { vid })
+                    enqueueYt("https://www.youtube.com/watch?v=$vid", null, null, plId, e.optString("title").ifBlank { vid }, order = i)
                 }
                 removeTask(id)
             } catch (e: Exception) {
@@ -721,11 +786,11 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val items = SpotifyApi.likedSongs(ctx)
                 if (items.isEmpty()) throw IOException("Beğenilen şarkı bulunamadı")
                 val plName = "Beğenilen şarkılar"
-                val plId = _playlists.value.find { it.name == plName }?.id ?: createPlaylist(plName)
+                val plId = playlistByName(plName)
                 var added = 0
-                items.forEach { (title, artist) ->
+                items.forEachIndexed { i, (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label)) added++
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, order = i)) added++
                 }
                 removeTask(id)
                 _notices.tryEmit("${items.size} beğenilen şarkı bulundu. $added tanesi indiriliyor, ${items.size - added} tanesi zaten vardı.")
@@ -742,13 +807,11 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val (name, items, cover) = resolveSpotify(url)
                 if (items.isEmpty()) throw IOException("Spotify'da şarkı bulunamadı")
                 val plName = name.ifBlank { "Spotify listesi" }
-                val plId = if (items.size > 1) {
-                    _playlists.value.find { it.name == plName }?.id ?: createPlaylist(plName)
-                } else null
+                val plId = if (items.size > 1) playlistByName(plName) else null
                 var added = 0
-                items.forEach { (title, artist) ->
+                items.forEachIndexed { i, (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)) added++
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, i)) added++
                 }
                 removeTask(id)
                 val skipped = items.size - added
@@ -804,6 +867,8 @@ class MusicRepository private constructor(private val ctx: Context) {
             try {
                 val (n, items) = SpotifyApi.playlist(ctx, sid)
                 if (items.isNotEmpty()) return Triple(n, items, null)
+            } catch (e: SpotifyApi.Bulunamadi) {
+                throw IOException("Spotify'da bu liste bulunamadı. Silinmiş ya da link hatalı olabilir.")
             } catch (e: SpotifyApi.Yasak) {
                 throw IOException(
                     "Spotify bu listenin şarkılarını vermiyor (liste senin değil). Spotify'da listeyi aç → ⋯ → " +

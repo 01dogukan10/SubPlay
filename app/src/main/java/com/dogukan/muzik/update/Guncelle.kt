@@ -38,7 +38,7 @@ object Guncelle {
     fun token(c: Context): String = prefs(c).getString("gh_token", "").orEmpty()
     fun setToken(c: Context, t: String) = prefs(c).edit().putString("gh_token", t.trim()).apply()
 
-    fun mevcutAd(c: Context): String = c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: ""
+    fun mevcutAd(c: Context): String = "Sürüm " + (c.packageManager.getPackageInfo(c.packageName, 0).versionName ?: "?")
 
     private fun mevcutKod(c: Context): Long {
         val p = c.packageManager.getPackageInfo(c.packageName, 0)

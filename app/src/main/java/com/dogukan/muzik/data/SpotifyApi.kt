@@ -29,6 +29,9 @@ object SpotifyApi {
     /** Spotify'ın şarkıları vermediği durum (başkasının listesi, yetki yok). */
     class Yasak(msg: String) : IOException(msg)
 
+    /** Liste/şarkı Spotify'da yok (silinmiş ya da link hatalı). */
+    class Bulunamadi(msg: String) : IOException(msg)
+
     private val _bagli = MutableStateFlow(false)
     val bagli = _bagli.asStateFlow()
 
@@ -144,7 +147,8 @@ object SpotifyApi {
                     Thread.sleep((conn.getHeaderField("Retry-After")?.toLongOrNull() ?: 2L).coerceAtMost(30) * 1000)
                     return get(c, url, attempt + 1)
                 }
-                code == 403 || code == 404 -> {
+                code == 404 -> throw Bulunamadi("Bulunamadı")
+                code == 403 -> {
                     val msg = runCatching { JSONObject(text).getJSONObject("error").optString("message") }.getOrNull().orEmpty()
                     throw Yasak(msg)
                 }

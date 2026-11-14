@@ -209,7 +209,7 @@ fun SettingsScreen(
             ListItem(
                 colors = transparentRow(),
                 leadingContent = { Icon(Icons.Default.Info, null) },
-                headlineContent = { Text("Sürüm") },
+                headlineContent = { Text("Uygulama sürümü") },
                 supportingContent = { Text(version) },
             )
             ListItem(
