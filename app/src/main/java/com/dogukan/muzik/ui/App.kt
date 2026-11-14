@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
@@ -200,6 +201,7 @@ fun App(
                         tracks, downloads, player.currentId, coverOf,
                         onPlay = { list, i -> vm.playTracks(list, i) },
                         onDismissDownload = vm.repo::dismissDownload,
+                        onRetryDownload = vm.repo::retryDownload,
                         menu = trackMenu,
                     )
                     tab == 1 && openPl != null -> PlaylistDetail(
@@ -253,9 +255,16 @@ fun App(
             initial = bulkInitial,
             onDismiss = { showBulk = false },
             onImport = { text, name ->
-                val n = vm.repo.bulkImport(text, name)
+                val r = vm.repo.bulkImport(text, name)
                 showBulk = false
-                toast(if (n > 0) "$n şarkı aranıp indiriliyor" else "Yeni şarkı yok (hepsi zaten kütüphanede)")
+                toast(
+                    when {
+                        r.found == 0 -> "Listede şarkı bulunamadı"
+                        r.added == 0 -> "Yeni şarkı yok: ${r.found} şarkının hepsi zaten kütüphanede ya da iniyor"
+                        r.added < r.found -> "${r.added} şarkı indiriliyor (${r.found - r.added} tanesi zaten vardı)"
+                        else -> "${r.added} şarkı aranıp indiriliyor"
+                    }
+                )
             },
         )
     }
@@ -345,7 +354,7 @@ fun App(
             confirmButton = {
                 TextButton(
                     enabled = title.isNotBlank(),
-                    onClick = { vm.repo.renameTrack(t.id, title.trim(), artist.trim()); editTrack = null },
+                    onClick = { vm.renameTrack(t.id, title.trim(), artist.trim()); editTrack = null },
                 ) { Text("Kaydet") }
             },
             dismissButton = { TextButton(onClick = { editTrack = null }) { Text("Vazgeç") } },
@@ -363,6 +372,7 @@ private fun LibraryScreen(
     coverOf: (Track) -> File?,
     onPlay: (List<Track>, Int) -> Unit,
     onDismissDownload: (String) -> Unit,
+    onRetryDownload: (String) -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -403,7 +413,7 @@ private fun LibraryScreen(
             }
         }
         LazyColumn(Modifier.fillMaxSize()) {
-            items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload) }
+            items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload, onRetryDownload) }
             if (filtered.isEmpty() && downloads.isEmpty()) {
                 item {
                     EmptyState(
@@ -432,7 +442,7 @@ private fun EmptyState(text: String) {
 }
 
 @Composable
-private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit) {
+private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit, onRetry: (String) -> Unit) {
     val c = MaterialTheme.colorScheme
     ListItem(
         colors = transparentRow(),
@@ -452,7 +462,12 @@ private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit) {
             }
         },
         trailingContent = {
-            if (d.error != null) IconButton(onClick = { onDismiss(d.id) }) { Icon(Icons.Default.Close, "Kapat") }
+            if (d.error != null) {
+                Row {
+                    IconButton(onClick = { onRetry(d.id) }) { Icon(Icons.Default.Refresh, "Tekrar dene") }
+                    IconButton(onClick = { onDismiss(d.id) }) { Icon(Icons.Default.Close, "Kapat") }
+                }
+            }
         },
     )
 }
@@ -564,7 +579,7 @@ private fun PlaylistDetail(
     currentId: String?,
     coverOf: (Track) -> File?,
     onBack: () -> Unit,
-    onPlay: (List<Track>, Int, Boolean) -> Unit,
+    onPlay: (List<Track>, Int, Boolean?) -> Unit,
     onRemove: (Track) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -603,7 +618,7 @@ private fun PlaylistDetail(
             }
         }
         itemsIndexed(songs, key = { _, t -> t.id }) { i, t ->
-            TrackRow(t, coverOf(t), t.id == currentId, onClick = { onPlay(songs, i, false) }) { close ->
+            TrackRow(t, coverOf(t), t.id == currentId, onClick = { onPlay(songs, i, null) }) { close ->
                 DropdownMenuItem(text = { Text("Listeden çıkar") }, onClick = { close(); onRemove(t) })
             }
         }

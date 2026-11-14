@@ -26,9 +26,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         handleIntent(intent)
 
-        if (Build.VERSION.SDK_INT >= 33 &&
+        // Bildirim iznini sadece bir kez sor
+        val prefs = getSharedPreferences("ayarlar", MODE_PRIVATE)
+        if (Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("bildirim_soruldu", false) &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
+            prefs.edit().putBoolean("bildirim_soruldu", true).apply()
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 

@@ -151,11 +151,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .build()
     }
 
-    fun playTracks(list: List<Track>, startIndex: Int = 0, shuffle: Boolean = false) {
+    /** shuffle = null -> karışık mod olduğu gibi kalır. */
+    fun playTracks(list: List<Track>, startIndex: Int = 0, shuffle: Boolean? = null) {
         val c = controller ?: return
         if (list.isEmpty()) return
         c.setMediaItems(list.map { it.toMediaItem() }, startIndex, 0L)
-        c.shuffleModeEnabled = shuffle
+        if (shuffle != null) c.shuffleModeEnabled = shuffle
         c.prepare()
         c.play()
     }
@@ -173,6 +174,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else -> Player.REPEAT_MODE_OFF
             }
         }
+    }
+
+    /** Adı değiştir; çalma kuyruğundaysa bildirim ve oynatıcı da güncellensin. */
+    fun renameTrack(id: String, title: String, artist: String) {
+        val t = repo.renameTrack(id, title, artist) ?: return
+        controller?.let { c ->
+            for (i in 0 until c.mediaItemCount) {
+                if (c.getMediaItemAt(i).mediaId == id) c.replaceMediaItem(i, t.toMediaItem())
+            }
+        }
+        refresh()
     }
 
     fun deleteTrack(t: Track) {

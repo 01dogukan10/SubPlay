@@ -24,6 +24,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import com.dogukan.muzik.download.DownloadService
 
 data class Track(
     val id: String,
@@ -36,6 +38,8 @@ data class Track(
 )
 
 data class Playlist(val id: String, val name: String, val trackIds: List<String>)
+
+data class BulkResult(val found: Int, val added: Int)
 
 data class SearchResult(
     val id: String,
@@ -82,6 +86,22 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     private val _downloads = MutableStateFlow<List<DownloadTask>>(emptyList())
     val downloads = _downloads.asStateFlow()
+
+    /** Hata veren indirmeleri yeniden başlatmak için. */
+    private val retries = ConcurrentHashMap<String, () -> Unit>()
+
+    /** Aynı kaynak inerken ikinci kez istenirse, bitince eklenecek listeler. */
+    private val pendingPlaylists = ConcurrentHashMap<String, MutableSet<String>>()
+
+    init {
+        // Önceki oturumdan kalan yarım dosyaları ve kurulmuş güncelleme APK'sını temizle
+        scope.launch {
+            musicDir.listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
+            ctx.cacheDir.listFiles()?.filter { it.isDirectory && it.name.startsWith("yt_") }
+                ?.forEach { it.deleteRecursively() }
+            File(ctx.cacheDir, "updates").deleteRecursively()
+        }
+    }
 
     fun fileOf(t: Track) = File(musicDir, t.fileName)
     fun coverOf(t: Track): File? = t.cover?.let { File(coversDir, it) }?.takeIf { it.exists() }
@@ -134,9 +154,9 @@ class MusicRepository private constructor(private val ctx: Context) {
      * Numaralar/madde işaretleri temizlenir, Exportify CSV'si de okunur.
      * Daha önce aynı aramayla indirilenler atlanır. Eklenen şarkı sayısını döndürür.
      */
-    fun bulkImport(text: String, playlistName: String?): Int {
+    fun bulkImport(text: String, playlistName: String?): BulkResult {
         val items = parseSongList(text)
-        if (items.isEmpty()) return 0
+        if (items.isEmpty()) return BulkResult(0, 0)
         val already = _tracks.value.map { it.sourceUrl }.toSet()
         val plId = playlistName?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
             _playlists.value.find { it.name.equals(name, ignoreCase = true) }?.id ?: createPlaylist(name)
@@ -150,10 +170,9 @@ class MusicRepository private constructor(private val ctx: Context) {
                 if (plId != null) _tracks.value.find { it.sourceUrl == query }?.let { addToPlaylist(plId, it.id) }
                 continue
             }
-            enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label)
-            count++
+            if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label)) count++
         }
-        return count
+        return BulkResult(items.size, count)
     }
 
     private fun parseSongList(text: String): List<Pair<String, String>> {
@@ -208,7 +227,19 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun newTask(url: String, name: String): String {
         val id = UUID.randomUUID().toString()
         synchronized(lock) { _downloads.value = _downloads.value + DownloadTask(id, url, name.take(80)) }
+        DownloadService.start(ctx)
         return id
+    }
+
+    private fun fail(id: String, e: Throwable, retry: () -> Unit) {
+        retries[id] = retry
+        updateTask(id) { it.copy(error = friendly(e)) }
+    }
+
+    fun retryDownload(id: String) {
+        val r = retries.remove(id) ?: return
+        removeTask(id)
+        r()
     }
 
     private fun removeTask(id: String) = synchronized(lock) {
@@ -228,7 +259,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 download(id, url, customTitle)
                 removeTask(id)
             } catch (e: Exception) {
-                updateTask(id) { it.copy(error = friendly(e)) }
+                fail(id, e) { startDirect(url, customTitle) }
             }
         }
     }
@@ -291,7 +322,13 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun enqueueYt(
         source: String, title: String?, artist: String?, playlistId: String?, label: String,
         coverUrl: String? = null,
-    ) {
+    ): Boolean {
+        // Aynı şarkı zaten iniyorsa ikinci kez indirme; sadece listesini not et
+        val inFlight = synchronized(lock) { _downloads.value.any { it.url == source && it.error == null } }
+        if (inFlight) {
+            if (playlistId != null) pendingPlaylists.getOrPut(source) { ConcurrentHashMap.newKeySet() }.add(playlistId)
+            return false
+        }
         val id = newTask(source, label)
         scope.launch {
             try {
@@ -299,12 +336,14 @@ class MusicRepository private constructor(private val ctx: Context) {
                     ensureYt()
                     val t = ytDownload(id, source, title, artist, coverUrl)
                     if (playlistId != null) addToPlaylist(playlistId, t.id)
+                    pendingPlaylists.remove(source)?.forEach { addToPlaylist(it, t.id) }
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                updateTask(id) { it.copy(error = friendly(e)) }
+                fail(id, e) { enqueueYt(source, title, artist, playlistId, label, coverUrl) }
             }
         }
+        return true
     }
 
     private fun ytDownload(taskId: String, source: String, title: String?, artist: String?, coverUrl: String?): Track {
@@ -370,7 +409,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                updateTask(id) { it.copy(error = friendly(e)) }
+                fail(id, e) { expandYtPlaylist(url) }
             }
         }
     }
@@ -390,7 +429,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                updateTask(id) { it.copy(error = friendly(e)) }
+                fail(id, e) { expandSpotify(url) }
             }
         }
     }
@@ -466,6 +505,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     }
 
     fun dismissDownload(id: String) = synchronized(lock) {
+        retries.remove(id)
         _downloads.value = _downloads.value.filterNot { it.id == id }
     }
 
@@ -615,9 +655,10 @@ class MusicRepository private constructor(private val ctx: Context) {
         saveTracks(); savePlaylists()
     }
 
-    fun renameTrack(id: String, title: String, artist: String) = synchronized(lock) {
+    fun renameTrack(id: String, title: String, artist: String): Track? = synchronized(lock) {
         _tracks.value = _tracks.value.map { if (it.id == id) it.copy(title = title, artist = artist) else it }
         saveTracks()
+        _tracks.value.find { it.id == id }
     }
 
     // ---------------- Çalma listeleri ----------------

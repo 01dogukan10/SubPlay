@@ -28,6 +28,7 @@ class PlaybackService : MediaSessionService() {
                 /* handleAudioFocus = */ true,
             )
             .setHandleAudioBecomingNoisy(true) // kulaklık çıkınca durdur
+            .setWakeMode(C.WAKE_MODE_LOCAL) // ekran kapalıyken de çalmaya devam et
             .build()
 
         val openApp = PendingIntent.getActivity(

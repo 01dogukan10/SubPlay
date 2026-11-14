@@ -8,6 +8,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -111,8 +113,6 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
 fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
     var swipe by remember { mutableFloatStateOf(0f) }
 
     Box(
@@ -147,102 +147,129 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
             )
         )
 
-        Column(
-            Modifier.fillMaxSize().systemBarsPadding().padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        BoxWithConstraints(Modifier.fillMaxSize().systemBarsPadding()) {
+            val wide = maxWidth > maxHeight
+            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.KeyboardArrowDown, "Kapat", modifier = Modifier.size(32.dp))
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text("ŞİMDİ ÇALIYOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp,
+                        color = c.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.width(48.dp))
+                }
+                if (wide) {
+                    // Yatay: kapak solda, kontroller sağda
+                    Row(
+                        Modifier.fillMaxSize().padding(bottom = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(28.dp),
+                    ) {
+                        Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
+                            CoverArt(ui, neon)
+                        }
+                        Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm) }
+                    }
+                } else {
+                    Box(
+                        Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { CoverArt(ui, neon) }
+                    InfoAndControls(ui, vm)
+                    Spacer(Modifier.height(36.dp))
+                }
+            }
+        }
+    }
+}
+
+/** Ekrana sığacak en büyük kare kapak. */
+@Composable
+private fun CoverArt(ui: PlayerUi, neon: Boolean) {
+    val c = MaterialTheme.colorScheme
+    val coverShape = RoundedCornerShape(24.dp)
+    Kapak(
+        ui.artwork,
+        Modifier
+            .aspectRatio(1f, matchHeightConstraintsFirst = true)
+            .shadow(
+                elevation = if (neon) 36.dp else 18.dp, shape = coverShape,
+                ambientColor = if (neon) c.primary else Color.Black,
+                spotColor = if (neon) c.primary else Color.Black,
+            )
+            .then(if (neon) Modifier.border(1.5.dp, neonKenar(), coverShape) else Modifier),
+        corner = 24.dp,
+    )
+}
+
+@Composable
+private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel) {
+    val c = MaterialTheme.colorScheme
+    val neon = LocalNeon.current
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(ui.title.orEmpty(), style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (ui.artist.isNotBlank()) {
+            Text(ui.artist, style = MaterialTheme.typography.titleMedium, color = c.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    Slider(
+        value = if (dragging) dragValue else ui.fraction(),
+        onValueChange = { dragging = true; dragValue = it },
+        onValueChangeFinished = { vm.seekTo((dragValue * ui.duration).toLong()); dragging = false },
+        enabled = ui.duration > 0,
+        colors = SliderDefaults.colors(
+            thumbColor = c.primary, activeTrackColor = if (neon) c.tertiary else c.primary,
+        ),
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        val shown = if (dragging) (dragValue * ui.duration).toLong() else ui.position
+        Text(fmt(shown), style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant)
+        Text(fmt(ui.duration), style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant)
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val off = c.onSurfaceVariant
+        IconButton(onClick = vm::toggleShuffle) {
+            Icon(Icons.Default.Shuffle, "Karışık", tint = if (ui.shuffle) c.primary else off)
+        }
+        IconButton(onClick = vm::previous, modifier = Modifier.size(56.dp)) {
+            Icon(Icons.Default.SkipPrevious, "Önceki", modifier = Modifier.size(40.dp))
+        }
+        FilledIconButton(
+            onClick = vm::togglePlay,
+            modifier = Modifier
+                .size(76.dp)
+                .then(if (neon) Modifier.shadow(20.dp, CircleShape, ambientColor = c.primary, spotColor = c.primary) else Modifier),
+            shape = CircleShape,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = c.primary, contentColor = c.onPrimary),
         ) {
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Default.KeyboardArrowDown, "Kapat", modifier = Modifier.size(32.dp))
-                }
-                Spacer(Modifier.weight(1f))
-                Text("ŞİMDİ ÇALIYOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp,
-                    color = c.onSurfaceVariant)
-                Spacer(Modifier.weight(1f))
-                Spacer(Modifier.width(48.dp))
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            val coverShape = RoundedCornerShape(24.dp)
-            Kapak(
-                ui.artwork,
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .shadow(
-                        elevation = if (neon) 36.dp else 18.dp, shape = coverShape,
-                        ambientColor = if (neon) c.primary else Color.Black,
-                        spotColor = if (neon) c.primary else Color.Black,
-                    )
-                    .then(if (neon) Modifier.border(1.5.dp, neonKenar(), coverShape) else Modifier),
-                corner = 24.dp,
+            Icon(if (ui.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (ui.isPlaying) "Duraklat" else "Çal", modifier = Modifier.size(40.dp))
+        }
+        IconButton(onClick = vm::next, modifier = Modifier.size(56.dp)) {
+            Icon(Icons.Default.SkipNext, "Sonraki", modifier = Modifier.size(40.dp))
+        }
+        IconButton(onClick = vm::cycleRepeat) {
+            Icon(
+                if (ui.repeat == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                "Tekrar", tint = if (ui.repeat == Player.REPEAT_MODE_OFF) off else c.primary,
             )
-
-            Spacer(Modifier.weight(1f))
-
-            Column(Modifier.fillMaxWidth()) {
-                Text(ui.title.orEmpty(), style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (ui.artist.isNotBlank()) {
-                    Text(ui.artist, style = MaterialTheme.typography.titleMedium, color = c.onSurfaceVariant,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            Slider(
-                value = if (dragging) dragValue else ui.fraction(),
-                onValueChange = { dragging = true; dragValue = it },
-                onValueChangeFinished = { vm.seekTo((dragValue * ui.duration).toLong()); dragging = false },
-                enabled = ui.duration > 0,
-                colors = SliderDefaults.colors(
-                    thumbColor = c.primary, activeTrackColor = if (neon) c.tertiary else c.primary,
-                ),
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                val shown = if (dragging) (dragValue * ui.duration).toLong() else ui.position
-                Text(fmt(shown), style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant)
-                Text(fmt(ui.duration), style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant)
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val off = c.onSurfaceVariant
-                IconButton(onClick = vm::toggleShuffle) {
-                    Icon(Icons.Default.Shuffle, "Karışık", tint = if (ui.shuffle) c.primary else off)
-                }
-                IconButton(onClick = vm::previous, modifier = Modifier.size(56.dp)) {
-                    Icon(Icons.Default.SkipPrevious, "Önceki", modifier = Modifier.size(40.dp))
-                }
-                FilledIconButton(
-                    onClick = vm::togglePlay,
-                    modifier = Modifier
-                        .size(76.dp)
-                        .then(if (neon) Modifier.shadow(20.dp, CircleShape, ambientColor = c.primary, spotColor = c.primary) else Modifier),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = c.primary, contentColor = c.onPrimary),
-                ) {
-                    Icon(if (ui.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        if (ui.isPlaying) "Duraklat" else "Çal", modifier = Modifier.size(40.dp))
-                }
-                IconButton(onClick = vm::next, modifier = Modifier.size(56.dp)) {
-                    Icon(Icons.Default.SkipNext, "Sonraki", modifier = Modifier.size(40.dp))
-                }
-                IconButton(onClick = vm::cycleRepeat) {
-                    Icon(
-                        if (ui.repeat == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                        "Tekrar", tint = if (ui.repeat == Player.REPEAT_MODE_OFF) off else c.primary,
-                    )
-                }
-            }
-            Spacer(Modifier.height(36.dp))
         }
     }
 }
