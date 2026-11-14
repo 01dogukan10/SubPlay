@@ -155,7 +155,7 @@ object Guncelle {
         )
         val n = NotificationCompat.Builder(c, "guncelle")
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("SubMüzik: yeni sürüm var (${s.ad})")
+            .setContentTitle("SubPlay: yeni sürüm var (${s.ad})")
             .setContentText("Güncellemek için dokun")
             .setContentIntent(pi).setAutoCancel(true).build()
         try { nm.notify(2, n) } catch (_: SecurityException) { }

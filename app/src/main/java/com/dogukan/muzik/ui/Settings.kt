@@ -201,7 +201,7 @@ fun SettingsScreen(
                 modifier = Modifier.clickable { importPicker.launch(null) },
                 leadingContent = { Icon(Icons.Default.Restore, null) },
                 headlineContent = { Text("Yedekten geri yükle") },
-                supportingContent = { Text("\"SubMüzik yedek\" klasörünü seç; olan şarkılar atlanır") },
+                supportingContent = { Text("\"SubPlay yedek\" klasörünü seç; olan şarkılar atlanır") },
             )
         }
 

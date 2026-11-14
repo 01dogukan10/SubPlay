@@ -26,7 +26,7 @@ import java.io.File
 
 object Paylas {
 
-    /** "Sanatçı - Şarkı" satırları; alan kişi SubMüzik'te Toplu ekle'ye yapıştırabilir. */
+    /** "Sanatçı - Şarkı" satırları; alan kişi SubPlay'te Toplu ekle'ye yapıştırabilir. */
     fun metin(ctx: Context, baslik: String, tracks: List<Track>) {
         if (tracks.isEmpty()) return
         val text = buildString {

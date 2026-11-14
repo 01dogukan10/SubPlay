@@ -523,7 +523,7 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     // ---------------- Yedek / taşıma ----------------
 
-    private val YEDEK_KLASORU = "SubMüzik yedek"
+    private val YEDEK_KLASORU = "SubPlay yedek"
 
     private fun copyToTree(src: File, dir: androidx.documentfile.provider.DocumentFile,
                            existing: Map<String?, androidx.documentfile.provider.DocumentFile>) {
@@ -535,7 +535,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         ctx.contentResolver.openOutputStream(f.uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
     }
 
-    /** Seçilen klasörün içine "SubMüzik yedek" oluşturup şarkıları, kapakları, kütüphaneyi ve listeleri yazar. */
+    /** Seçilen klasörün içine "SubPlay yedek" oluşturup şarkıları, kapakları, kütüphaneyi ve listeleri yazar. */
     fun exportBackup(tree: android.net.Uri) {
         val id = newTask("yedek", "Yedekleniyor…")
         scope.launch {
@@ -577,14 +577,14 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    /** "SubMüzik yedek" klasöründen (ya da onu içeren klasörden) her şeyi geri yükler; var olanlar atlanır. */
+    /** "SubPlay yedek" klasöründen (ya da onu içeren klasörden) her şeyi geri yükler; var olanlar atlanır. */
     fun importBackup(tree: android.net.Uri) {
         val id = newTask("geri-yukle", "Yedek okunuyor…")
         scope.launch {
             try {
                 val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, tree) ?: throw IOException("Klasör açılamadı")
                 val dir = if (root.findFile("yedek.json") != null) root
-                else root.findFile(YEDEK_KLASORU) ?: throw IOException("Seçilen klasörde SubMüzik yedeği yok. \"$YEDEK_KLASORU\" klasörünü seç.")
+                else root.findFile(YEDEK_KLASORU) ?: root.findFile("SubMüzik yedek") ?: throw IOException("Seçilen klasörde SubPlay yedeği yok. \"$YEDEK_KLASORU\" klasörünü seç.")
                 val jf = dir.findFile("yedek.json") ?: throw IOException("yedek.json bulunamadı")
                 val json = JSONObject(ctx.contentResolver.openInputStream(jf.uri)!!.bufferedReader().use { it.readText() })
                 val songs = dir.findFile("sarkilar")?.listFiles()?.associateBy { it.name }.orEmpty()
@@ -676,7 +676,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                         "<html><head><meta name=viewport content='width=device-width'>" +
                             "<script>setTimeout(function(){location.href='submuzik://spotify-callback?done=1'},300)</script></head>" +
                             "<body style='font-family:sans-serif;background:#0d0d10;color:#eee;text-align:center;padding-top:30vh'>" +
-                            "<h2>Spotify girişi tamam</h2><p><a style='color:#1db954' href='submuzik://spotify-callback?done=1'>SubMüzik'e dön</a></p></body></html>"
+                            "<h2>Spotify girişi tamam</h2><p><a style='color:#1db954' href='submuzik://spotify-callback?done=1'>SubPlay'e dön</a></p></body></html>"
                     } else ""
                     val bytes = html.toByteArray()
                     sock.getOutputStream().use { o ->

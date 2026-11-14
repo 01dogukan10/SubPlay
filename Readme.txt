@@ -1,5 +1,5 @@
-SubMüzik
-========
+SubPlay
+=======
 
 Telefonuna şarkı indirip internetsiz dinlemeni sağlayan bir Android müzik uygulaması.
 Şarkıyı adıyla arayabilir, YouTube ya da Spotify linkini yapıştırabilir veya elindeki
@@ -32,7 +32,7 @@ NASIL KULLANILIR?
 
 İpuçları
 - Toplu eklemede Sanatçı - Şarkı şeklinde yazarsan doğru şarkı daha kolay bulunur. Satır başındaki 1., - gibi işaretleri silmene gerek yok.
-- Başka bir uygulamada Paylaş → SubMüzik dersen link ya da liste doğrudan uygulamaya gelir.
+- Başka bir uygulamada Paylaş → SubPlay dersen link ya da liste doğrudan uygulamaya gelir.
 - Daha önce indirdiğin şarkılar tekrar inmez.
 - İndirme sürerken uygulamadan çıkabilirsin; bildirimde ilerlemeyi görürsün.
 
@@ -50,7 +50,7 @@ NASIL KULLANILIR?
 
 * Paylaşmak
 Paylaş simgesine basınca iki seçenek çıkar:
-- Liste olarak paylaş: şarkı adlarını yazı olarak gönderir. Karşı taraf bunu kendi SubMüzik'inde Toplu ekle'ye yapıştırırsa aynı şarkılar ona da iner.
+- Liste olarak paylaş: şarkı adlarını yazı olarak gönderir. Karşı taraf bunu kendi SubPlay'inde Toplu ekle'ye yapıştırırsa aynı şarkılar ona da iner.
 - Dosyaları gönder: şarkı dosyalarının kendisini Quick Share, WhatsApp ya da Bluetooth ile gönderir.
 
 * Görünüm
@@ -63,7 +63,7 @@ Ayarlar sekmesinden:
 
 * Yedeklemek ve başka telefona taşımak
 - Ayarlar → Yedekle: şarkıları, kapakları ve listeleri seçtiğin klasöre kopyalar.
-- Ayarlar → Yedekten geri yükle: "SubMüzik yedek" klasörünü seçersin, her şey geri gelir.
+- Ayarlar → Yedekten geri yükle: "SubPlay yedek" klasörünü seçersin, her şey geri gelir.
 
 SIK SORULAN SORULAR
 -------------------
