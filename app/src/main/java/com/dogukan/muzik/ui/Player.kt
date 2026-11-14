@@ -110,7 +110,7 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
 }
 
 @Composable
-fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
+fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit = {}) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     var swipe by remember { mutableFloatStateOf(0f) }
@@ -161,7 +161,9 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
                     Text("ŞİMDİ ÇALIYOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp,
                         color = c.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.width(48.dp))
+                    IconButton(onClick = onOpenQueue) {
+                        Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.QueueMusic, "Sıra")
+                    }
                 }
                 if (wide) {
                     // Yatay: kapak solda, kontroller sağda

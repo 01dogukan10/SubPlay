@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Share
@@ -138,6 +139,8 @@ fun App(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
+    var showQueue by rememberSaveable { mutableStateOf(false) }
+    val sira by vm.sira.collectAsStateWithLifecycle()
     var libSort by remember { mutableStateOf(vm.repo.siralama("kutuphane", Siralama.YENI)) }
 
     var showAdd by remember { mutableStateOf(false) }
@@ -171,10 +174,17 @@ fun App(
         }
     }
 
-    BackHandler(enabled = showPlayer) { showPlayer = false }
+    BackHandler(enabled = showPlayer && !showQueue) { showPlayer = false }
+    BackHandler(enabled = showQueue) { showQueue = false }
     BackHandler(enabled = !showPlayer && tab == 1 && openPlaylistId != null) { openPlaylistId = null }
 
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
+        DropdownMenuItem(text = { Text("Sıradaki olarak çal") }, onClick = {
+            close(); vm.queueTracks(listOf(t), basa = true); toast("Sıradaki olarak çalacak")
+        })
+        DropdownMenuItem(text = { Text("Sıraya ekle") }, onClick = {
+            close(); vm.queueTracks(listOf(t), basa = false); toast("Sıraya eklendi")
+        })
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
         DropdownMenuItem(text = { Text("Paylaş") }, onClick = { close(); Paylas.dosyalar(ctx, t.title, listOf(vm.repo.fileOf(t))) })
@@ -235,6 +245,7 @@ fun App(
                         onRetryDownload = vm.repo::retryDownload,
                         onRetryAll = vm.repo::retryAllFailed,
                         onDismissAll = vm.repo::dismissAllFailed,
+                        onSelQueue = { vm.queueTracks(it, basa = false); toast("${it.size} şarkı sıraya eklendi") },
                         shuffle = player.shuffle,
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
@@ -253,6 +264,8 @@ fun App(
                         onMove = { t, d -> vm.repo.moveInPlaylist(openPl.id, t.id, d) },
                         onAddTracks = { vm.repo.addTracksToPlaylist(openPl.id, it) },
                         onRemoveMany = { list -> list.forEach { vm.repo.removeFromPlaylist(openPl.id, it.id) } },
+                        onSelQueue = { vm.queueTracks(it, basa = false); toast(if (it.size == 1) "Sıraya eklendi" else "${it.size} şarkı sıraya eklendi") },
+                        onSelQueueNext = { vm.queueTracks(listOf(it), basa = true); toast("Sıradaki olarak çalacak") },
                         shuffle = player.shuffle,
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
@@ -295,7 +308,15 @@ fun App(
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
         ) {
-            FullPlayer(player, vm, onClose = { showPlayer = false })
+            FullPlayer(player, vm, onClose = { showPlayer = false }, onOpenQueue = { showQueue = true })
+        }
+
+        AnimatedVisibility(
+            visible = showQueue && player.title != null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+        ) {
+            QueueScreen(sira, player, vm, onClose = { showQueue = false })
         }
       }
     }
@@ -437,6 +458,7 @@ private fun LibraryScreen(
     onRetryDownload: (String) -> Unit,
     onRetryAll: () -> Unit,
     onDismissAll: () -> Unit,
+    onSelQueue: (List<Track>) -> Unit,
     shuffle: Boolean,
     onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
@@ -473,6 +495,9 @@ private fun LibraryScreen(
                     selected = if (selected.containsAll(ids)) emptySet() else ids
                 },
             ) {
+                IconButton(onClick = { onSelQueue(filtered.filter { it.id in selected }); selected = emptySet() }) {
+                    Icon(Icons.AutoMirrored.Filled.PlaylistPlay, "Sıraya ekle")
+                }
                 ShareMenu("Seçilen şarkılar", { tracks.filter { it.id in selected } }, fileOf)
                 IconButton(onClick = { onSelAddToPlaylist(tracks.filter { it.id in selected }); selected = emptySet() }) {
                     Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Listeye ekle")
@@ -868,6 +893,8 @@ private fun PlaylistDetail(
     onMove: (Track, Int) -> Unit,
     onAddTracks: (List<String>) -> Unit,
     onRemoveMany: (List<Track>) -> Unit,
+    onSelQueue: (List<Track>) -> Unit,
+    onSelQueueNext: (Track) -> Unit,
     shuffle: Boolean,
     onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
@@ -912,6 +939,9 @@ private fun PlaylistDetail(
                 ) {
                     IconButton(onClick = { onRemoveMany(songs.filter { it.id in selected }); selected = emptySet() }) {
                         Icon(Icons.Default.RemoveCircleOutline, "Listeden çıkar")
+                    }
+                    IconButton(onClick = { onSelQueue(songs.filter { it.id in selected }); selected = emptySet() }) {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistPlay, "Sıraya ekle")
                     }
                     ShareMenu(playlist.name, { songs.filter { it.id in selected } }, fileOf)
                     IconButton(onClick = { onSelAddToPlaylist(songs.filter { it.id in selected }); selected = emptySet() }) {
@@ -1031,6 +1061,8 @@ private fun PlaylistDetail(
                     selected = if (selecting) t.id in selected else null,
                     onLongClick = { toggle(t.id) },
                 ) { close ->
+                    DropdownMenuItem(text = { Text("Sıradaki olarak çal") }, onClick = { close(); onSelQueueNext(t) })
+                    DropdownMenuItem(text = { Text("Sıraya ekle") }, onClick = { close(); onSelQueue(listOf(t)) })
                     if (order == Siralama.LISTE) {
                         DropdownMenuItem(text = { Text("Yukarı taşı") }, onClick = { close(); onMove(t, -1) })
                         DropdownMenuItem(text = { Text("Aşağı taşı") }, onClick = { close(); onMove(t, 1) })

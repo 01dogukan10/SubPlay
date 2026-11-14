@@ -10,6 +10,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
+import androidx.media3.common.C
+import android.os.Bundle
+import com.dogukan.muzik.player.MedyaOge
+import com.dogukan.muzik.player.SiraKomut
 import androidx.media3.session.SessionToken
 import com.dogukan.muzik.data.MusicRepository
 import com.dogukan.muzik.data.Track
@@ -23,6 +28,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+/** Sıra ekranındaki bir satır. index = oynatıcıdaki dizini. */
+data class SiraOge(val index: Int, val trackId: String, val title: String, val artist: String, val artwork: Uri?)
+
+/** queued = kullanıcının sıraya ekledikleri; upcoming = sonra listeden gelecekler. */
+data class SiraUi(val queued: List<SiraOge> = emptyList(), val upcoming: List<SiraOge> = emptyList(), val moreCount: Int = 0)
 
 data class PlayerUi(
     val currentId: String? = null,
@@ -56,7 +67,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ).buildAsync()
 
     private val listener = object : Player.Listener {
-        override fun onEvents(player: Player, events: Player.Events) = refresh()
+        override fun onEvents(player: Player, events: Player.Events) {
+            refresh()
+            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION,
+                    Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) refreshSira()
+        }
     }
 
     private val _update = MutableStateFlow(UpdateUi())
@@ -108,6 +123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             controller = runCatching { future.get() }.getOrNull()
             controller?.addListener(listener)
             refresh()
+            refreshSira()
         }, ContextCompat.getMainExecutor(app))
 
         // Çalarken ilerleme çubuğunu güncelle
@@ -117,6 +133,56 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (controller?.isPlaying == true) refresh()
             }
         }
+    }
+
+    private val _sira = MutableStateFlow(SiraUi())
+    val sira = _sira.asStateFlow()
+
+    /** Çalma sırasını oynatıcıdan okur (karışıksa karışık sırayla). */
+    private fun refreshSira() {
+        val c = controller ?: return
+        val tl = c.currentTimeline
+        if (tl.isEmpty || c.mediaItemCount == 0) { _sira.value = SiraUi(); return }
+        val shuffle = c.shuffleModeEnabled
+        val next = ArrayList<Int>()
+        var i = c.currentMediaItemIndex
+        while (next.size < c.mediaItemCount) {
+            i = tl.getNextWindowIndex(i, Player.REPEAT_MODE_OFF, shuffle)
+            if (i == C.INDEX_UNSET) break
+            next += i
+        }
+        fun oge(idx: Int): SiraOge {
+            val m = c.getMediaItemAt(idx)
+            return SiraOge(idx, m.mediaId, m.mediaMetadata.title?.toString().orEmpty(),
+                m.mediaMetadata.artist?.toString().orEmpty(), m.mediaMetadata.artworkUri)
+        }
+        val queued = next.takeWhile { MedyaOge.kuyrukta(c.getMediaItemAt(it)) }
+        val rest = next.drop(queued.size)
+        _sira.value = SiraUi(queued.map(::oge), rest.take(80).map(::oge), (rest.size - 80).coerceAtLeast(0))
+    }
+
+    private fun komut(ad: String, args: Bundle = Bundle.EMPTY) {
+        controller?.sendCustomCommand(SessionCommand(ad, Bundle.EMPTY), args)
+    }
+
+    /** Spotify'daki "Sıraya ekle" (basa=false) ve "Sıradaki olarak çal" (basa=true). */
+    fun queueTracks(list: List<Track>, basa: Boolean) {
+        val c = controller ?: return
+        if (list.isEmpty()) return
+        if (c.mediaItemCount == 0) { playTracks(list, 0); return }
+        komut(SiraKomut.EKLE, Bundle().apply {
+            putStringArray("ids", list.map { it.id }.toTypedArray())
+            putBoolean("basa", basa)
+        })
+    }
+
+    fun queueRemove(pos: Int) = komut(SiraKomut.CIKAR, Bundle().apply { putInt("pos", pos) })
+    fun queueMove(from: Int, to: Int) = komut(SiraKomut.TASI, Bundle().apply { putInt("from", from); putInt("to", to) })
+    fun queueClear() = komut(SiraKomut.TEMIZLE)
+
+    /** Sıradaki bir şarkıya atla. */
+    fun jumpTo(index: Int) {
+        controller?.let { it.seekTo(index, 0L); it.play() }
     }
 
     private fun refresh() {
@@ -135,28 +201,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
-    private fun Track.toMediaItem(): MediaItem {
-        val uri = Uri.fromFile(repo.fileOf(this))
-        return MediaItem.Builder()
-            .setMediaId(id)
-            .setUri(uri)
-            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(title)
-                    .setArtist(artist.ifBlank { null })
-                    .setArtworkUri(repo.coverOf(this)?.let { Uri.fromFile(it) })
-                    .build()
-            )
-            .build()
-    }
+    private fun Track.toMediaItem(kuyruk: Boolean = false): MediaItem = MedyaOge.of(repo, this, kuyruk)
 
     /** shuffle = null -> karışık mod olduğu gibi kalır. */
     fun playTracks(list: List<Track>, startIndex: Int = 0, shuffle: Boolean? = null) {
         val c = controller ?: return
         if (list.isEmpty()) return
+        // Spotify gibi: kullanıcının sıraya eklediği şarkılar yeni liste çalınca da kaybolmaz
+        val byId = repo.tracks.value.associateBy { it.id }
+        val keep = _sira.value.queued.mapNotNull { byId[it.trackId] }
         c.setMediaItems(list.map { it.toMediaItem() }, startIndex, 0L)
         if (shuffle != null) c.shuffleModeEnabled = shuffle
+        komut(SiraKomut.YENI_KUYRUK)
+        if (keep.isNotEmpty()) queueTracks(keep, basa = false)
         c.prepare()
         c.play()
     }
@@ -181,7 +238,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val t = repo.renameTrack(id, title, artist) ?: return
         controller?.let { c ->
             for (i in 0 until c.mediaItemCount) {
-                if (c.getMediaItemAt(i).mediaId == id) c.replaceMediaItem(i, t.toMediaItem())
+                val old = c.getMediaItemAt(i)
+                if (old.mediaId == id) c.replaceMediaItem(i, t.toMediaItem(MedyaOge.kuyrukta(old)))
             }
         }
         refresh()
