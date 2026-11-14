@@ -19,6 +19,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -92,13 +95,13 @@ private fun SmartPlayControls(shuffle: Boolean, onToggleShuffle: () -> Unit, onP
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onToggleShuffle) {
-            Icon(androidx.compose.material.icons.Icons.Default.Shuffle, "Karışık",
+            Icon(Icons.Default.Shuffle, "Karışık",
                 tint = if (shuffle) c.primary else c.onSurfaceVariant)
         }
         androidx.compose.material3.FilledIconButton(
             onClick = onPlay,
             modifier = Modifier.size(52.dp).neonCerceve(androidx.compose.foundation.shape.CircleShape),
-        ) { Icon(androidx.compose.material.icons.Icons.Default.PlayArrow, "Çal") }
+        ) { Icon(Icons.Default.PlayArrow, "Çal") }
     }
 }
 
@@ -117,7 +120,7 @@ private fun SmartRow(t: Track, cover: File?, playing: Boolean, onClick: () -> Un
         supportingContent = if (t.artist.isNotBlank()) { { Text(t.artist, maxLines = 1, color = c.onSurfaceVariant) } } else null,
         trailingContent = {
             Box {
-                IconButton(onClick = { open = true }) { Icon(androidx.compose.material.icons.Icons.Default.MoreVert, "Seçenekler") }
+                IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "Seçenekler") }
                 androidx.compose.material3.DropdownMenu(open, { open = false }) { menu { open = false } }
             }
         },

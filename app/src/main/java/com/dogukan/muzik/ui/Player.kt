@@ -24,6 +24,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
@@ -231,8 +235,8 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
         // ♥ Beğen
         IconButton(onClick = ekstra.onLike) {
             Icon(
-                if (ekstra.liked) androidx.compose.material.icons.Icons.Default.Favorite
-                else androidx.compose.material.icons.Icons.Default.FavoriteBorder,
+                if (ekstra.liked) Icons.Default.Favorite
+                else Icons.Default.FavoriteBorder,
                 if (ekstra.liked) "Beğenmekten vazgeç" else "Beğen",
                 tint = if (ekstra.liked) c.primary else c.onSurfaceVariant,
                 modifier = Modifier.size(28.dp),
@@ -296,7 +300,7 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
     // Şarkı sözleri
     Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
         androidx.compose.material3.TextButton(onClick = ekstra.onLyrics) {
-            Icon(androidx.compose.material.icons.Icons.Default.Lyrics, null)
+            Icon(Icons.Default.Lyrics, null)
             Spacer(Modifier.width(6.dp))
             Text("Şarkı sözleri")
         }
@@ -321,13 +325,13 @@ private fun UykuDugmesi(e: OynaticiEkstra) {
         if (e.uyku != null) {
             val kalan = if (e.uyku == -1L) "şarkı sonu" else "${((e.uyku - System.currentTimeMillis()) / 60_000L + 1).coerceAtLeast(1)} dk"
             androidx.compose.material3.TextButton(onClick = { open = true }) {
-                Icon(androidx.compose.material.icons.Icons.Default.Bedtime, null, tint = c.primary, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Bedtime, null, tint = c.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(4.dp))
                 Text(kalan, color = c.primary, style = MaterialTheme.typography.labelLarge)
             }
         } else {
             IconButton(onClick = { open = true }) {
-                Icon(androidx.compose.material.icons.Icons.Default.Bedtime, "Uyku zamanlayıcısı")
+                Icon(Icons.Default.Bedtime, "Uyku zamanlayıcısı")
             }
         }
         androidx.compose.material3.DropdownMenu(open, { open = false }) {

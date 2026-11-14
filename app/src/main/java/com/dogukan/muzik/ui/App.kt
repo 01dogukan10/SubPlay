@@ -153,7 +153,9 @@ fun App(
     val begeniler = remember(playlists) {
         playlists.find { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }?.trackIds?.toSet() ?: emptySet()
     }
-    val begen: (Track) -> Unit = { t -> toast(if (vm.repo.toggleLike(t.id)) "Beğendiklerim'e eklendi" else "Beğendiklerim'den çıkarıldı") }
+    val begen: (Track) -> Unit = { t ->
+        Toast.makeText(ctx, if (vm.repo.toggleLike(t.id)) "Beğendiklerim'e eklendi" else "Beğendiklerim'den çıkarıldı", Toast.LENGTH_SHORT).show()
+    }
     val sira by vm.sira.collectAsStateWithLifecycle()
     var libSort by remember { mutableStateOf(vm.repo.siralama("kutuphane", Siralama.YENI)) }
 
