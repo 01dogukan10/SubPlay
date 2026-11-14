@@ -46,6 +46,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Share
+import com.dogukan.muzik.data.siraAnahtari
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.filled.CheckCircle
@@ -174,6 +177,7 @@ fun App(
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
+        DropdownMenuItem(text = { Text("Paylaş") }, onClick = { close(); Paylas.dosyalar(ctx, t.title, listOf(vm.repo.fileOf(t))) })
         DropdownMenuItem(text = { Text("Sil") }, onClick = { close(); confirmDelete = listOf(t) })
     }
 
@@ -231,6 +235,7 @@ fun App(
                         onRetryDownload = vm.repo::retryDownload,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
+                        fileOf = vm.repo::fileOf,
                         sira = libSort,
                         onSira = { libSort = it; vm.repo.setSiralama("kutuphane", it) },
                         menu = trackMenu,
@@ -246,6 +251,7 @@ fun App(
                         onRemoveMany = { list -> list.forEach { vm.repo.removeFromPlaylist(openPl.id, it.id) } },
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
+                        fileOf = vm.repo::fileOf,
                         customCover = vm.repo.playlistCover(openPl),
                         onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
                         sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
@@ -440,10 +446,12 @@ private fun LibraryScreen(
     onRetryDownload: (String) -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
+    fileOf: (Track) -> File,
     sira: Siralama,
     onSira: (Siralama) -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
+    val listState = rememberLazyListState()
     val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
     var selected by remember { mutableStateOf(setOf<String>()) }
@@ -467,6 +475,7 @@ private fun LibraryScreen(
                     selected = if (selected.containsAll(ids)) emptySet() else ids
                 },
             ) {
+                ShareMenu("Seçilen şarkılar", { tracks.filter { it.id in selected } }, fileOf)
                 IconButton(onClick = { onSelAddToPlaylist(tracks.filter { it.id in selected }); selected = emptySet() }) {
                     Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Listeye ekle")
                 }
@@ -475,7 +484,9 @@ private fun LibraryScreen(
                 }
             }
         } else {
-            ScreenTitle("Kütüphane")
+            ScreenTitle("Kütüphane") {
+                if (tracks.isNotEmpty()) ShareMenu("Kütüphanem", { filtered }, fileOf)
+            }
         }
         // Şarkı sayısı (aramada kaç sonuç olduğu da görünür)
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
@@ -517,7 +528,8 @@ private fun LibraryScreen(
                 }
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
             items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload, onRetryDownload) }
             if (filtered.isEmpty() && downloads.isEmpty()) {
                 item {
@@ -536,7 +548,20 @@ private fun LibraryScreen(
             }
             item { Spacer(Modifier.height(88.dp)) }
         }
+        val offset = downloads.size + if (filtered.isEmpty() && downloads.isEmpty()) 1 else 0
+        FastScroller(listState, Modifier.align(Alignment.TopEnd)) { idx ->
+            filtered.getOrNull(idx - offset)?.let { scrollLabel(it, sira, idx - offset) }
+        }
+        }
     }
+}
+
+/** Kaydırma baloncuğunda gösterilecek: harf, sanatçı harfi, tarih ya da sıra no. */
+private fun scrollLabel(t: Track, sira: Siralama, index: Int): String = when (sira) {
+    Siralama.AD_AZ, Siralama.AD_ZA -> siraAnahtari(t.title).take(1).uppercase(TR).ifBlank { "#" }
+    Siralama.SANATCI -> siraAnahtari(t.artist).take(1).uppercase(TR).ifBlank { "?" }
+    Siralama.YENI, Siralama.ESKI -> java.text.SimpleDateFormat("d MMM\nyyyy", TR).format(java.util.Date(t.addedAt))
+    Siralama.LISTE -> "${index + 1}"
 }
 
 @Composable
@@ -760,6 +785,7 @@ private fun PlaylistDetail(
     onRemoveMany: (List<Track>) -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
+    fileOf: (Track) -> File,
     customCover: File?,
     onCover: (android.net.Uri?) -> Unit,
     sira: Siralama,
@@ -769,6 +795,7 @@ private fun PlaylistDetail(
     var editing by rememberSaveable { mutableStateOf(false) }
     var order by remember(playlist.id) { mutableStateOf(sira) }
     var selected by remember(playlist.id) { mutableStateOf(setOf<String>()) }
+    val listState = rememberLazyListState()
     val selecting = selected.isNotEmpty()
     BackHandler(enabled = selecting) { selected = emptySet() }
     fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
@@ -784,7 +811,8 @@ private fun PlaylistDetail(
     var showRename by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
 
-    LazyColumn(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState) {
         item {
             if (selecting) {
                 SelectionBar(
@@ -798,6 +826,7 @@ private fun PlaylistDetail(
                     IconButton(onClick = { onRemoveMany(songs.filter { it.id in selected }); selected = emptySet() }) {
                         Icon(Icons.Default.RemoveCircleOutline, "Listeden çıkar")
                     }
+                    ShareMenu(playlist.name, { songs.filter { it.id in selected } }, fileOf)
                     IconButton(onClick = { onSelAddToPlaylist(songs.filter { it.id in selected }); selected = emptySet() }) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Başka listeye ekle")
                     }
@@ -814,6 +843,7 @@ private fun PlaylistDetail(
                         Icon(Icons.Default.Check, null); Spacer(Modifier.width(4.dp)); Text("Bitti")
                     }
                 } else {
+                    if (songs.isNotEmpty()) ShareMenu(playlist.name, { songs }, fileOf)
                     IconButton(onClick = { editing = true }) { Icon(Icons.Default.Edit, "Düzenle") }
                 }
             }
@@ -921,6 +951,12 @@ private fun PlaylistDetail(
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+    if (!editing) {
+        FastScroller(listState, Modifier.align(Alignment.TopEnd)) { idx ->
+            songs.getOrNull(idx - 1)?.let { scrollLabel(it, order, idx - 1) }
+        }
+    }
     }
 
     if (showRename) {
