@@ -146,7 +146,7 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 )
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = id.isNotBlank(), onClick = { onSpotifyClientId(id); onSpotifyLogin() }) {
+                    NButton(enabled = id.isNotBlank(), onClick = { onSpotifyClientId(id); onSpotifyLogin() }) {
                         Text("Spotify ile giriş yap")
                     }
                     TextButton(onClick = { showHelp = !showHelp }) { Text(if (showHelp) "Yardımı gizle" else "Nasıl?") }

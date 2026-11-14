@@ -39,7 +39,32 @@ data class Track(
     val cover: String? = null, // covers/ klasöründeki dosya adı
 )
 
-data class Playlist(val id: String, val name: String, val trackIds: List<String>)
+data class Playlist(val id: String, val name: String, val trackIds: List<String>, val cover: String? = null)
+
+/** Kütüphane ve listelerde sıralama seçenekleri. LISTE = listenin kendi (elle düzenlenen) sırası. */
+enum class Siralama(val ad: String) {
+    LISTE("Liste sırası"),
+    YENI("Eklenme: en yeni"),
+    ESKI("Eklenme: en eski"),
+    AD_AZ("İsim: A → Z"),
+    AD_ZA("İsim: Z → A"),
+    SANATCI("Sanatçı: A → Z"),
+}
+
+fun List<Track>.sirala(s: Siralama): List<Track> {
+    val col = java.text.Collator.getInstance(java.util.Locale("tr")).apply { strength = java.text.Collator.PRIMARY }
+    return when (s) {
+        Siralama.LISTE -> this
+        Siralama.YENI -> sortedByDescending { it.addedAt }
+        Siralama.ESKI -> sortedBy { it.addedAt }
+        Siralama.AD_AZ -> sortedWith { a, b -> col.compare(a.title, b.title) }
+        Siralama.AD_ZA -> sortedWith { a, b -> col.compare(b.title, a.title) }
+        Siralama.SANATCI -> sortedWith { a, b ->
+            val x = col.compare(a.artist.ifBlank { "\uFFFF" }, b.artist.ifBlank { "\uFFFF" })
+            if (x != 0) x else col.compare(a.title, b.title)
+        }
+    }
+}
 
 data class BulkResult(val found: Int, val added: Int)
 
@@ -868,6 +893,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     }
 
     fun deletePlaylist(id: String) = synchronized(lock) {
+        _playlists.value.find { it.id == id }?.cover?.let { File(coversDir, it).delete() }
         _playlists.value = _playlists.value.filterNot { it.id == id }
         savePlaylists()
     }
@@ -878,6 +904,31 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
         savePlaylists()
     }
+
+    fun playlistCover(p: Playlist): File? = p.cover?.let { File(coversDir, it) }?.takeIf { it.exists() }
+
+    /** Galeriden seçilen resmi listenin kapağı yapar (uri null ise kapağı kaldırır). */
+    fun setPlaylistCover(playlistId: String, uri: android.net.Uri?) {
+        scope.launch {
+            val newName = uri?.let {
+                runCatching {
+                    val name = "pl_${playlistId}_${System.currentTimeMillis()}.img"
+                    ctx.contentResolver.openInputStream(it)!!.use { i -> File(coversDir, name).outputStream().use { o -> i.copyTo(o) } }
+                    name
+                }.getOrNull() ?: run { _notices.tryEmit("Resim okunamadı"); return@launch }
+            }
+            synchronized(lock) {
+                _playlists.value.find { it.id == playlistId }?.cover?.let { File(coversDir, it).delete() }
+                _playlists.value = _playlists.value.map { if (it.id == playlistId) it.copy(cover = newName) else it }
+                savePlaylists()
+            }
+        }
+    }
+
+    // Sıralama tercihleri (ekran başına)
+    fun siralama(key: String, varsayilan: Siralama): Siralama =
+        runCatching { Siralama.valueOf(prefs.getString("sirala_$key", varsayilan.name)!!) }.getOrDefault(varsayilan)
+    fun setSiralama(key: String, s: Siralama) = prefs.edit().putString("sirala_$key", s.name).apply()
 
     fun renamePlaylist(playlistId: String, name: String) = synchronized(lock) {
         _playlists.value = _playlists.value.map { if (it.id == playlistId) it.copy(name = name.trim()) else it }
@@ -939,14 +990,16 @@ class MusicRepository private constructor(private val ctx: Context) {
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             val ids = o.getJSONArray("trackIds")
-            Playlist(o.getString("id"), o.getString("name"), (0 until ids.length()).map { ids.getString(it) })
+            Playlist(o.getString("id"), o.getString("name"), (0 until ids.length()).map { ids.getString(it) },
+                o.optString("cover").ifBlank { null })
         }
     }.getOrDefault(emptyList())
 
     private fun savePlaylists() {
         val arr = JSONArray()
         _playlists.value.forEach { p ->
-            arr.put(JSONObject().put("id", p.id).put("name", p.name).put("trackIds", JSONArray(p.trackIds)))
+            arr.put(JSONObject().put("id", p.id).put("name", p.name).put("trackIds", JSONArray(p.trackIds))
+                .put("cover", p.cover ?: ""))
         }
         plFile.writeText(arr.toString())
     }

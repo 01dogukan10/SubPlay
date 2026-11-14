@@ -3,6 +3,16 @@ package com.dogukan.muzik.ui
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -190,3 +200,43 @@ fun Kapak(model: Any?, modifier: Modifier = Modifier, corner: Dp = 8.dp) {
         }
     }
 }
+
+
+/** Neon modunda kenarına renkli çizgi + ışıma ekler. */
+@Composable
+fun Modifier.neonCerceve(shape: Shape = CircleShape, glow: Boolean = true): Modifier {
+    if (!LocalNeon.current) return this
+    val c = MaterialTheme.colorScheme
+    return this
+        .then(if (glow) Modifier.shadow(10.dp, shape, ambientColor = c.primary, spotColor = c.primary) else Modifier)
+        .border(1.5.dp, neonKenar(), shape)
+}
+
+@Composable
+fun NButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = Button(onClick, modifier.neonCerceve(glow = enabled), enabled = enabled, content = content)
+
+@Composable
+fun NTonalButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = FilledTonalButton(onClick, modifier.neonCerceve(glow = false), enabled = enabled, content = content)
+
+@Composable
+fun NOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) = OutlinedButton(
+    onClick, modifier, enabled = enabled,
+    border = if (LocalNeon.current) androidx.compose.foundation.BorderStroke(1.5.dp, neonKenar())
+    else ButtonDefaults.outlinedButtonBorder(enabled),
+    content = content,
+)

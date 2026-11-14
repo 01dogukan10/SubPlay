@@ -78,7 +78,11 @@ object Guncelle {
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
                 if (o.getString("name").endsWith(".apk")) {
-                    return Surum(kod, j.optString("name", "v$kod"), o.getString("url"), j.optString("body", ""))
+                    // Eski sürümlerdeki imza satırlarını gösterme
+                    val not = j.optString("body", "").lines()
+                        .filterNot { it.startsWith("Co-Authored-By") || it.startsWith("Claude-Session") }
+                        .joinToString("\n").trim()
+                    return Surum(kod, j.optString("name", "v$kod"), o.getString("url"), not)
                 }
             }
             return null

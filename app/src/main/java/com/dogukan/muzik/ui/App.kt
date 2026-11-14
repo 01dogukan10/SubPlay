@@ -46,6 +46,13 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Image
+import androidx.activity.result.PickVisualMediaRequest
+import com.dogukan.muzik.data.Siralama
+import com.dogukan.muzik.data.sirala
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -121,6 +128,7 @@ fun App(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
+    var libSort by remember { mutableStateOf(vm.repo.siralama("kutuphane", Siralama.YENI)) }
 
     var showAdd by remember { mutableStateOf(false) }
     var addInitial by remember { mutableStateOf("") }
@@ -164,8 +172,11 @@ fun App(
     }
 
     Box(Modifier.fillMaxSize().background(arkaPlan())) {
+      // Şeffaf zeminde yazı/simge rengi temaya göre olsun (koyu modda siyah kalmasın)
+      CompositionLocalProvider(LocalContentColor provides c.onBackground) {
         Scaffold(
             containerColor = Color.Transparent,
+            contentColor = c.onBackground,
             floatingActionButton = {
                 if (tab == 0) {
                     FloatingActionButton(
@@ -173,7 +184,7 @@ fun App(
                         shape = CircleShape,
                         containerColor = c.primary,
                         contentColor = c.onPrimary,
-                        modifier = if (neon) Modifier.shadow(18.dp, CircleShape, ambientColor = c.primary, spotColor = c.primary) else Modifier,
+                        modifier = Modifier.neonCerceve(CircleShape),
                     ) { Icon(Icons.Default.Add, contentDescription = "Şarkı ekle") }
                 }
             },
@@ -212,6 +223,8 @@ fun App(
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
                         onDismissDownload = vm.repo::dismissDownload,
                         onRetryDownload = vm.repo::retryDownload,
+                        sira = libSort,
+                        onSira = { libSort = it; vm.repo.setSiralama("kutuphane", it) },
                         menu = trackMenu,
                     )
                     tab == 1 && openPl != null -> PlaylistDetail(
@@ -222,9 +235,13 @@ fun App(
                         onRename = { vm.repo.renamePlaylist(openPl.id, it) },
                         onMove = { t, d -> vm.repo.moveInPlaylist(openPl.id, t.id, d) },
                         onAddTracks = { vm.repo.addTracksToPlaylist(openPl.id, it) },
+                        customCover = vm.repo.playlistCover(openPl),
+                        onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
+                        sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
+                        onSira = { vm.repo.setSiralama("liste_${openPl.id}", it) },
                     )
                     tab == 1 -> PlaylistsScreen(
-                        playlists, tracks, coverOf,
+                        playlists, tracks, coverOf, vm.repo::playlistCover,
                         onOpen = { openPlaylistId = it.id },
                         onCreate = { vm.repo.createPlaylist(it) },
                         onDelete = { vm.repo.deletePlaylist(it.id) },
@@ -256,6 +273,7 @@ fun App(
         ) {
             FullPlayer(player, vm, onClose = { showPlayer = false })
         }
+      }
     }
 
     // ---------------- Diyaloglar ----------------
@@ -403,20 +421,24 @@ private fun LibraryScreen(
     onPlay: (List<Track>, Int, Boolean?) -> Unit,
     onDismissDownload: (String) -> Unit,
     onRetryDownload: (String) -> Unit,
+    sira: Siralama,
+    onSira: (Siralama) -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
-    val filtered = remember(tracks, query) {
+    val filtered = remember(tracks, query, sira) {
         val q = query.trim().lowercase(TR)
-        if (q.isEmpty()) tracks
-        else tracks.filter { it.title.lowercase(TR).contains(q) || it.artist.lowercase(TR).contains(q) }
+        val sorted = tracks.sirala(sira)
+        if (q.isEmpty()) sorted
+        else sorted.filter { it.title.lowercase(TR).contains(q) || it.artist.lowercase(TR).contains(q) }
     }
 
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Kütüphane")
         // Şarkı sayısı (aramada kaç sonuç olduğu da görünür)
-        Row(Modifier.padding(start = 20.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             StatChip(
                 if (query.isBlank()) "${tracks.size} şarkı" else "${filtered.size} / ${tracks.size} şarkı",
                 highlight = true,
@@ -425,6 +447,8 @@ private fun LibraryScreen(
             val failed = downloads.size - active
             if (active > 0) StatChip("$active indiriliyor")
             if (failed > 0) StatChip("$failed hata")
+            Spacer(Modifier.weight(1f))
+            SortMenu(sira, Siralama.entries.filter { it != Siralama.LISTE }, onSira)
         }
         OutlinedTextField(
             value = query, onValueChange = { query = it },
@@ -444,10 +468,10 @@ private fun LibraryScreen(
         )
         if (filtered.isNotEmpty()) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onPlay(filtered, 0, false) }) {
+                NButton(onClick = { onPlay(filtered, 0, false) }) {
                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Tümünü çal")
                 }
-                FilledTonalButton(onClick = { onPlay(filtered, filtered.indices.random(), true) }) {
+                NTonalButton(onClick = { onPlay(filtered, filtered.indices.random(), true) }) {
                     Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık çal")
                 }
             }
@@ -560,6 +584,7 @@ private fun PlaylistsScreen(
     playlists: List<Playlist>,
     library: List<Track>,
     coverOf: (Track) -> File?,
+    playlistCoverOf: (Playlist) -> File?,
     onOpen: (Playlist) -> Unit,
     onCreate: (String) -> Unit,
     onDelete: (Playlist) -> Unit,
@@ -570,7 +595,7 @@ private fun PlaylistsScreen(
 
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Listeler") {
-            FilledTonalButton(onClick = { showNew = true }) {
+            NTonalButton(onClick = { showNew = true }) {
                 Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Yeni")
             }
         }
@@ -578,7 +603,7 @@ private fun PlaylistsScreen(
         LazyColumn {
             items(playlists, key = { it.id }) { p ->
                 var expanded by remember { mutableStateOf(false) }
-                val first = p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
+                val first = playlistCoverOf(p) ?: p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
                 ListItem(
                     colors = transparentRow(),
                     modifier = Modifier.clickable { onOpen(p) },
@@ -613,6 +638,27 @@ private fun PlaylistsScreen(
 }
 
 @Composable
+private fun SortMenu(current: Siralama, options: List<Siralama>, onPick: (Siralama) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }) {
+            Icon(Icons.AutoMirrored.Filled.Sort, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(current.ad, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+        DropdownMenu(open, { open = false }) {
+            options.forEach { o ->
+                DropdownMenuItem(
+                    text = { Text(o.ad, fontWeight = if (o == current) FontWeight.Bold else null) },
+                    leadingIcon = { if (o == current) Icon(Icons.Default.Check, null) },
+                    onClick = { open = false; onPick(o) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun StatChip(text: String, highlight: Boolean = false) {
     val c = MaterialTheme.colorScheme
     Box(
@@ -637,12 +683,23 @@ private fun PlaylistDetail(
     onRename: (String) -> Unit,
     onMove: (Track, Int) -> Unit,
     onAddTracks: (List<String>) -> Unit,
+    customCover: File?,
+    onCover: (android.net.Uri?) -> Unit,
+    sira: Siralama,
+    onSira: (Siralama) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
-    val byId = remember(library) { library.associateBy { it.id } }
-    val songs = remember(playlist, byId) { playlist.trackIds.mapNotNull { byId[it] } }
-    val headerCover = songs.firstNotNullOfOrNull(coverOf)
     var editing by rememberSaveable { mutableStateOf(false) }
+    var order by remember(playlist.id) { mutableStateOf(sira) }
+    val byId = remember(library) { library.associateBy { it.id } }
+    val manual = remember(playlist, byId) { playlist.trackIds.mapNotNull { byId[it] } }
+    // Düzenlerken her zaman listenin kendi sırası gösterilir
+    val songs = remember(manual, order, editing) { if (editing) manual else manual.sirala(order) }
+    val headerCover = customCover ?: manual.firstNotNullOfOrNull(coverOf)
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) onCover(uri)
+    }
+    fun pickCover() = picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     var showRename by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
 
@@ -652,7 +709,7 @@ private fun PlaylistDetail(
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
                 Spacer(Modifier.weight(1f))
                 if (editing) {
-                    FilledTonalButton(onClick = { editing = false }) {
+                    NTonalButton(onClick = { editing = false }) {
                         Icon(Icons.Default.Check, null); Spacer(Modifier.width(4.dp)); Text("Bitti")
                     }
                 } else {
@@ -660,12 +717,22 @@ private fun PlaylistDetail(
                 }
             }
             Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-                Kapak(
-                    headerCover,
-                    Modifier.size(128.dp).shadow(16.dp, RoundedCornerShape(18.dp),
-                        ambientColor = c.primary, spotColor = c.primary),
-                    corner = 18.dp,
-                )
+                Box {
+                    Kapak(
+                        headerCover,
+                        Modifier.size(128.dp).shadow(16.dp, RoundedCornerShape(18.dp),
+                            ambientColor = c.primary, spotColor = c.primary)
+                            .neonCerceve(RoundedCornerShape(18.dp), glow = false)
+                            .then(if (editing) Modifier.clickable { pickCover() } else Modifier),
+                        corner = 18.dp,
+                    )
+                    if (editing) {
+                        Box(
+                            Modifier.align(Alignment.BottomEnd).padding(6.dp)
+                                .background(Color.Black.copy(alpha = 0.6f), CircleShape).padding(6.dp)
+                        ) { Icon(Icons.Default.Image, "Kapağı değiştir", tint = Color.White, modifier = Modifier.size(18.dp)) }
+                    }
+                }
                 Column(Modifier.padding(start = 16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(playlist.name, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
@@ -676,22 +743,38 @@ private fun PlaylistDetail(
                     }
                     Spacer(Modifier.height(6.dp))
                     StatChip("${songs.size} şarkı", highlight = true)
+                    if (!editing && songs.size > 1) {
+                        SortMenu(order, Siralama.entries) { order = it; onSira(it) }
+                    }
                 }
             }
             Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (editing) {
-                    Button(onClick = { showPicker = true }) {
+                    NButton(onClick = { showPicker = true }) {
                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Şarkı ekle")
                     }
-                    OutlinedButton(onClick = { showRename = true }) { Text("Adını değiştir") }
+                    NOutlinedButton(onClick = { pickCover() }) {
+                        Icon(Icons.Default.Image, null); Spacer(Modifier.width(4.dp)); Text("Kapak")
+                    }
                 } else {
-                    Button(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, 0, false) }) {
+                    NButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, 0, false) }) {
                         Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Çal")
                     }
-                    FilledTonalButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, songs.indices.random(), true) }) {
+                    NTonalButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, songs.indices.random(), true) }) {
                         Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık")
                     }
-                    OutlinedButton(onClick = { showPicker = true }) { Icon(Icons.Default.Add, "Şarkı ekle") }
+                    NOutlinedButton(onClick = { showPicker = true }) { Icon(Icons.Default.Add, "Şarkı ekle") }
+                }
+            }
+            if (editing) {
+                Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NOutlinedButton(onClick = { showRename = true }) { Text("Adını değiştir") }
+                    if (customCover != null) NOutlinedButton(onClick = { onCover(null) }) { Text("Kapağı kaldır") }
+                }
+                if (order != Siralama.LISTE) {
+                    Text("Düzenlerken listenin kendi sırası gösteriliyor.",
+                        style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
                 }
             }
             if (songs.isEmpty()) {
@@ -723,8 +806,10 @@ private fun PlaylistDetail(
                 )
             } else {
                 TrackRow(t, coverOf(t), t.id == currentId, onClick = { onPlay(songs, i, null) }) { close ->
-                    DropdownMenuItem(text = { Text("Yukarı taşı") }, onClick = { close(); onMove(t, -1) })
-                    DropdownMenuItem(text = { Text("Aşağı taşı") }, onClick = { close(); onMove(t, 1) })
+                    if (order == Siralama.LISTE) {
+                        DropdownMenuItem(text = { Text("Yukarı taşı") }, onClick = { close(); onMove(t, -1) })
+                        DropdownMenuItem(text = { Text("Aşağı taşı") }, onClick = { close(); onMove(t, 1) })
+                    }
                     DropdownMenuItem(text = { Text("Listeden çıkar") }, onClick = { close(); onRemove(t) })
                 }
             }
