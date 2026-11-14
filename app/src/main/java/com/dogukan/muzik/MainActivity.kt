@@ -60,6 +60,10 @@ class MainActivity : ComponentActivity() {
 
     /** Tarayıcıdan "Paylaş → Müzik" ile gelen linki yakala. */
     private fun handleIntent(i: Intent?) {
+        if (i?.action == Intent.ACTION_VIEW && i.data?.scheme == "submuzik") {
+            i.data?.let { com.dogukan.muzik.data.MusicRepository.get(this).finishSpotifyLogin(it) }
+            return
+        }
         if (i?.action != Intent.ACTION_SEND) return
         val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
         val url = Regex("https?://\\S+").find(text)?.value

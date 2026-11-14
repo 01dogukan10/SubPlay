@@ -106,6 +106,7 @@ fun App(
     val downloads by vm.repo.downloads.collectAsStateWithLifecycle()
     val player by vm.ui.collectAsStateWithLifecycle()
     val update by vm.update.collectAsStateWithLifecycle()
+    val spotifyBagli by com.dogukan.muzik.data.SpotifyApi.bagli.collectAsStateWithLifecycle()
     val ctx = LocalContext.current
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
@@ -225,6 +226,14 @@ fun App(
                         onCheckUpdate = { vm.checkUpdate(manual = true, onMessage = toast) },
                         onToken = { showToken = true },
                         onUpdateDownloader = vm.repo::updateYtDlp,
+                        spotifyBagli = spotifyBagli,
+                        spotifyClientId = com.dogukan.muzik.data.SpotifyApi.clientId(ctx),
+                        onSpotifyClientId = { com.dogukan.muzik.data.SpotifyApi.setClientId(ctx, it) },
+                        onSpotifyLogin = {
+                            com.dogukan.muzik.data.SpotifyApi.loginIntent(ctx)?.let { runCatching { ctx.startActivity(it) } }
+                        },
+                        onSpotifyLogout = { com.dogukan.muzik.data.SpotifyApi.logout(ctx) },
+                        onImportLiked = { vm.repo.importLikedSongs(); tab = 0 },
                     )
                 }
             }

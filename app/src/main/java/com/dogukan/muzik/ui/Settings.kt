@@ -19,7 +19,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
@@ -64,6 +70,12 @@ fun SettingsScreen(
     onCheckUpdate: () -> Unit,
     onToken: () -> Unit,
     onUpdateDownloader: suspend () -> String,
+    spotifyBagli: Boolean,
+    spotifyClientId: String,
+    onSpotifyClientId: (String) -> Unit,
+    onSpotifyLogin: () -> Unit,
+    onSpotifyLogout: () -> Unit,
+    onImportLiked: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
@@ -114,6 +126,57 @@ fun SettingsScreen(
                 supportingContent = { Text("Renkli geçişler, parlayan kenarlar ve kapak ışıması") },
                 trailingContent = { Switch(checked = tema.neon, onCheckedChange = { onTema(tema.copy(neon = it)) }) },
             )
+        }
+
+        Section("Spotify") {
+            var id by remember(spotifyClientId) { mutableStateOf(spotifyClientId) }
+            var showHelp by remember { mutableStateOf(spotifyClientId.isBlank()) }
+            ListItem(
+                colors = transparentRow(),
+                leadingContent = { Icon(Icons.Default.Link, null) },
+                headlineContent = { Text(if (spotifyBagli) "Bağlı" else "Bağlı değil") },
+                supportingContent = {
+                    Text(if (spotifyBagli) "Kendi listelerinin tamamı gelir (100 sınırı yok)"
+                    else "Girişsiz sadece ilk 100 şarkı gelir")
+                },
+            )
+            if (!spotifyBagli) {
+                OutlinedTextField(
+                    id, { id = it }, label = { Text("Client ID") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                )
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = id.isNotBlank(), onClick = { onSpotifyClientId(id); onSpotifyLogin() }) {
+                        Text("Spotify ile giriş yap")
+                    }
+                    TextButton(onClick = { showHelp = !showHelp }) { Text(if (showHelp) "Yardımı gizle" else "Nasıl?") }
+                }
+                if (showHelp) {
+                    Text(
+                        "1) developer.spotify.com/dashboard adresine Spotify hesabınla gir → Create app.\n" +
+                            "2) Ad ve açıklama yaz. Redirect URI olarak tam olarak şunu ekle:\n    ${com.dogukan.muzik.data.SpotifyApi.REDIRECT}\n" +
+                            "3) \"Web API\" kutusunu işaretle, kaydet.\n" +
+                            "4) Uygulamanın Settings sayfasındaki Client ID'yi kopyalayıp buraya yapıştır, giriş yap.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = c.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            } else {
+                ListItem(
+                    colors = transparentRow(),
+                    modifier = Modifier.clickable(onClick = onImportLiked),
+                    leadingContent = { Icon(Icons.Default.Favorite, null) },
+                    headlineContent = { Text("Beğenilen şarkılarımı indir") },
+                    supportingContent = { Text("\"Beğenilen şarkılar\" adlı listeye toplanır") },
+                )
+                ListItem(
+                    colors = transparentRow(),
+                    modifier = Modifier.clickable(onClick = onSpotifyLogout),
+                    leadingContent = { Icon(Icons.AutoMirrored.Filled.Logout, null) },
+                    headlineContent = { Text("Spotify çıkış yap") },
+                )
+            }
         }
 
         Section("Güncelleme") {

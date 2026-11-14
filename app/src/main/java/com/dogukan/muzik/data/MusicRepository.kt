@@ -124,6 +124,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     private val pendingPlaylists = ConcurrentHashMap<String, MutableSet<String>>()
 
     init {
+        SpotifyApi.init(ctx)
         // Önceki oturumdan kalan yarım dosyaları ve kurulmuş güncelleme APK'sını temizle
         scope.launch {
             musicDir.listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
@@ -490,6 +491,38 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     // ---------------- Spotify ----------------
 
+    fun finishSpotifyLogin(data: android.net.Uri) {
+        scope.launch {
+            try {
+                SpotifyApi.finishLogin(ctx, data)
+                _notices.tryEmit("Spotify'a bağlandın. Artık listelerin tamamı gelir.")
+            } catch (e: Exception) {
+                _notices.tryEmit(friendly(e))
+            }
+        }
+    }
+
+    fun importLikedSongs() {
+        val id = newTask("spotify:liked", "Beğenilen şarkılar okunuyor…")
+        scope.launch {
+            try {
+                val items = SpotifyApi.likedSongs(ctx)
+                if (items.isEmpty()) throw IOException("Beğenilen şarkı bulunamadı")
+                val plName = "Beğenilen şarkılar"
+                val plId = _playlists.value.find { it.name == plName }?.id ?: createPlaylist(plName)
+                var added = 0
+                items.forEach { (title, artist) ->
+                    val label = if (artist.isBlank()) title else "$artist - $title"
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label)) added++
+                }
+                removeTask(id)
+                _notices.tryEmit("${items.size} beğenilen şarkı bulundu. $added tanesi indiriliyor, ${items.size - added} tanesi zaten vardı.")
+            } catch (e: Exception) {
+                fail(id, if (e is SpotifyApi.Yasak) IOException("Spotify beğenilen şarkıları vermedi: ${e.message}") else e) { importLikedSongs() }
+            }
+        }
+    }
+
     private fun expandSpotify(url: String) {
         val id = newTask(url, "Spotify okunuyor…")
         scope.launch {
@@ -507,10 +540,11 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
                 val skipped = items.size - added
-                if (url.contains("/playlist/") && items.size >= 100) {
+                if (url.contains("/playlist/") && items.size == 100 && !SpotifyApi.bagli.value) {
                     _notices.tryEmit(
-                        "Spotify bu yolla sadece ilk 100 şarkıyı veriyor.\n\n" +
-                            "Listenin tamamı için iki yol var:\n\n" +
+                        "Spotify girişsiz sadece ilk 100 şarkıyı veriyor.\n\n" +
+                            "En kolayı: Ayarlar → Spotify bölümünden giriş yap ve linki tekrar yapıştır, listenin tamamı gelir.\n\n" +
+                            "Diğer yollar:\n\n" +
                             "1) Telefon tarayıcısında exportify.net'e gir, Spotify ile giriş yap, listeyi CSV olarak indir. " +
                             "Sonra burada + → Toplu ekle → Dosyadan aç ile o CSV'yi seç.\n\n" +
                             "2) Bilgisayardaki Spotify uygulamasında listeyi aç, Ctrl+A ile tüm şarkıları seç, Ctrl+C ile kopyala. " +
@@ -552,6 +586,22 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
         m ?: throw IOException("Spotify linki anlaşılamadı (şarkı, albüm veya çalma listesi linki olmalı)")
         val (type, sid) = m.destructured
+
+        // Spotify'a giriş yapıldıysa listenin tamamını resmi API'den al (100 sınırı yok)
+        if (type == "playlist" && SpotifyApi.bagli.value) {
+            try {
+                val (n, items) = SpotifyApi.playlist(ctx, sid)
+                if (items.isNotEmpty()) return Triple(n, items, null)
+            } catch (e: SpotifyApi.Yasak) {
+                throw IOException(
+                    "Spotify bu listenin şarkılarını vermiyor (liste senin değil). Spotify'da listeyi aç → ⋯ → " +
+                        "\"Diğer çalma listesine ekle\" → Yeni çalma listesi ile kendine kopyala, sonra yeni listenin linkini yapıştır."
+                )
+            } catch (e: Exception) {
+                if (e.message?.contains("oturumu") == true) _notices.tryEmit(e.message!!)
+                // diğer hatalarda anahtarsız yönteme dön
+            }
+        }
 
         val (_, html) = httpGet("https://open.spotify.com/embed/$type/$sid")
         val json = Regex("<script id=\"__NEXT_DATA__\" type=\"application/json\">(.*?)</script>", RegexOption.DOT_MATCHES_ALL)
