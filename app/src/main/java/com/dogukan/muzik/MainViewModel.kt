@@ -187,6 +187,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    fun deleteTracks(list: List<Track>) = list.forEach { deleteTrack(it) }
+
     fun deleteTrack(t: Track) {
         controller?.let { c ->
             for (i in c.mediaItemCount - 1 downTo 0) {

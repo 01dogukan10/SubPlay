@@ -51,17 +51,24 @@ enum class Siralama(val ad: String) {
     SANATCI("Sanatçı: A → Z"),
 }
 
+/** Sıralarken baştaki İngilizce tanımlıkları ("The", "A", "An") ve noktalama işaretlerini sayma. */
+private val baslikEki = Regex("^(the|a|an)\\s+", RegexOption.IGNORE_CASE)
+fun siraAnahtari(s: String): String =
+    s.trim().trimStart { !it.isLetterOrDigit() }.replace(baslikEki, "").trimStart { !it.isLetterOrDigit() }
+
 fun List<Track>.sirala(s: Siralama): List<Track> {
     val col = java.text.Collator.getInstance(java.util.Locale("tr")).apply { strength = java.text.Collator.PRIMARY }
+    val ad = { t: Track -> siraAnahtari(t.title) }
+    val sanatci = { t: Track -> siraAnahtari(t.artist).ifBlank { "\uFFFF" } }
     return when (s) {
         Siralama.LISTE -> this
         Siralama.YENI -> sortedByDescending { it.addedAt }
         Siralama.ESKI -> sortedBy { it.addedAt }
-        Siralama.AD_AZ -> sortedWith { a, b -> col.compare(a.title, b.title) }
-        Siralama.AD_ZA -> sortedWith { a, b -> col.compare(b.title, a.title) }
+        Siralama.AD_AZ -> sortedWith { a, b -> col.compare(ad(a), ad(b)) }
+        Siralama.AD_ZA -> sortedWith { a, b -> col.compare(ad(b), ad(a)) }
         Siralama.SANATCI -> sortedWith { a, b ->
-            val x = col.compare(a.artist.ifBlank { "\uFFFF" }, b.artist.ifBlank { "\uFFFF" })
-            if (x != 0) x else col.compare(a.title, b.title)
+            val x = col.compare(sanatci(a), sanatci(b))
+            if (x != 0) x else col.compare(ad(a), ad(b))
         }
     }
 }

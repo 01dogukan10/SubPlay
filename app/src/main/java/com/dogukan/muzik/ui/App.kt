@@ -46,6 +46,11 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material.icons.automirrored.filled.Sort
@@ -67,6 +72,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -137,8 +143,8 @@ fun App(
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { vm.repo.notices.collect { notice = it } }
     var bulkInitial by remember { mutableStateOf("") }
-    var pickPlaylistFor by remember { mutableStateOf<Track?>(null) }
-    var confirmDelete by remember { mutableStateOf<Track?>(null) }
+    var pickPlaylistFor by remember { mutableStateOf<List<Track>?>(null) }
+    var confirmDelete by remember { mutableStateOf<List<Track>?>(null) }
     var editTrack by remember { mutableStateOf<Track?>(null) }
 
     val coverOf: (Track) -> File? = { vm.repo.coverOf(it) }
@@ -166,9 +172,9 @@ fun App(
     BackHandler(enabled = !showPlayer && tab == 1 && openPlaylistId != null) { openPlaylistId = null }
 
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
-        DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = t })
+        DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
-        DropdownMenuItem(text = { Text("Sil") }, onClick = { close(); confirmDelete = t })
+        DropdownMenuItem(text = { Text("Sil") }, onClick = { close(); confirmDelete = listOf(t) })
     }
 
     Box(Modifier.fillMaxSize().background(arkaPlan())) {
@@ -223,6 +229,8 @@ fun App(
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
                         onDismissDownload = vm.repo::dismissDownload,
                         onRetryDownload = vm.repo::retryDownload,
+                        onSelAddToPlaylist = { pickPlaylistFor = it },
+                        onSelDelete = { confirmDelete = it },
                         sira = libSort,
                         onSira = { libSort = it; vm.repo.setSiralama("kutuphane", it) },
                         menu = trackMenu,
@@ -235,6 +243,9 @@ fun App(
                         onRename = { vm.repo.renamePlaylist(openPl.id, it) },
                         onMove = { t, d -> vm.repo.moveInPlaylist(openPl.id, t.id, d) },
                         onAddTracks = { vm.repo.addTracksToPlaylist(openPl.id, it) },
+                        onRemoveMany = { list -> list.forEach { vm.repo.removeFromPlaylist(openPl.id, it.id) } },
+                        onSelAddToPlaylist = { pickPlaylistFor = it },
+                        onSelDelete = { confirmDelete = it },
                         customCover = vm.repo.playlistCover(openPl),
                         onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
                         sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
@@ -368,21 +379,27 @@ fun App(
         )
     }
 
-    pickPlaylistFor?.let { t ->
+    pickPlaylistFor?.let { list ->
+        val ids = list.map { it.id }
         AddToPlaylistDialog(
             playlists,
             onDismiss = { pickPlaylistFor = null },
-            onPick = { vm.repo.addToPlaylist(it, t.id); pickPlaylistFor = null },
-            onCreate = { name -> vm.repo.addToPlaylist(vm.repo.createPlaylist(name), t.id); pickPlaylistFor = null },
+            onPick = { vm.repo.addTracksToPlaylist(it, ids); pickPlaylistFor = null; if (ids.size > 1) toast("${ids.size} şarkı listeye eklendi") },
+            onCreate = { name -> vm.repo.addTracksToPlaylist(vm.repo.createPlaylist(name), ids); pickPlaylistFor = null },
         )
     }
 
-    confirmDelete?.let { t ->
+    confirmDelete?.let { list ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text("Şarkı silinsin mi?") },
-            text = { Text("\"${t.title}\" telefondan silinecek ve tüm listelerden çıkarılacak.") },
-            confirmButton = { TextButton(onClick = { vm.deleteTrack(t); confirmDelete = null }) { Text("Sil") } },
+            title = { Text(if (list.size == 1) "Şarkı silinsin mi?" else "${list.size} şarkı silinsin mi?") },
+            text = {
+                Text(
+                    if (list.size == 1) "\"${list[0].title}\" telefondan silinecek ve tüm listelerden çıkarılacak."
+                    else "Seçilen ${list.size} şarkı telefondan silinecek ve tüm listelerden çıkarılacak."
+                )
+            },
+            confirmButton = { TextButton(onClick = { vm.deleteTracks(list); confirmDelete = null }) { Text("Sil") } },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Vazgeç") } },
         )
     }
@@ -421,12 +438,18 @@ private fun LibraryScreen(
     onPlay: (List<Track>, Int, Boolean?) -> Unit,
     onDismissDownload: (String) -> Unit,
     onRetryDownload: (String) -> Unit,
+    onSelAddToPlaylist: (List<Track>) -> Unit,
+    onSelDelete: (List<Track>) -> Unit,
     sira: Siralama,
     onSira: (Siralama) -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting) { selected = emptySet() }
+    fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
     val filtered = remember(tracks, query, sira) {
         val q = query.trim().lowercase(TR)
         val sorted = tracks.sirala(sira)
@@ -435,7 +458,25 @@ private fun LibraryScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        ScreenTitle("Kütüphane")
+        if (selecting) {
+            SelectionBar(
+                count = selected.size,
+                onClose = { selected = emptySet() },
+                onSelectAll = {
+                    val ids = filtered.map { it.id }.toSet()
+                    selected = if (selected.containsAll(ids)) emptySet() else ids
+                },
+            ) {
+                IconButton(onClick = { onSelAddToPlaylist(tracks.filter { it.id in selected }); selected = emptySet() }) {
+                    Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Listeye ekle")
+                }
+                IconButton(onClick = { onSelDelete(tracks.filter { it.id in selected }); selected = emptySet() }) {
+                    Icon(Icons.Default.Delete, "Sil", tint = c.error)
+                }
+            }
+        } else {
+            ScreenTitle("Kütüphane")
+        }
         // Şarkı sayısı (aramada kaç sonuç olduğu da görünür)
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -487,7 +528,10 @@ private fun LibraryScreen(
                 }
             }
             itemsIndexed(filtered, key = { _, t -> t.id }) { i, t ->
-                TrackRow(t, coverOf(t), playing = t.id == currentId, onClick = { onPlay(filtered, i, null) },
+                TrackRow(t, coverOf(t), playing = t.id == currentId,
+                    onClick = { if (selecting) toggle(t.id) else onPlay(filtered, i, null) },
+                    selected = if (selecting) t.id in selected else null,
+                    onLongClick = { toggle(t.id) },
                     menu = { close -> menu(t, close) })
             }
             item { Spacer(Modifier.height(88.dp)) }
@@ -537,22 +581,28 @@ private fun DownloadRow(d: DownloadTask, onDismiss: (String) -> Unit, onRetry: (
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun TrackRow(
     t: Track,
     cover: File?,
     playing: Boolean,
     onClick: () -> Unit,
+    selected: Boolean? = null, // null = seçim modu kapalı
+    onLongClick: (() -> Unit)? = null,
     menu: @Composable (close: () -> Unit) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
     ListItem(
-        colors = transparentRow(),
-        modifier = Modifier.clickable(onClick = onClick),
+        colors = if (selected == true) ListItemDefaults.colors(containerColor = c.primary.copy(alpha = 0.14f)) else transparentRow(),
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
         leadingContent = {
             Box(contentAlignment = Alignment.Center) {
                 Kapak(cover, Modifier.size(52.dp), corner = 10.dp)
-                if (playing) {
+                if (selected == true) {
+                    Box(Modifier.size(52.dp).background(c.primary.copy(alpha = 0.55f), RoundedCornerShape(10.dp)))
+                    Icon(Icons.Default.CheckCircle, null, tint = c.onPrimary)
+                } else if (playing) {
                     Box(Modifier.size(52.dp).background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(10.dp)))
                     Icon(Icons.Default.GraphicEq, null, tint = c.primary)
                 }
@@ -567,14 +617,38 @@ private fun TrackRow(
             { Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) }
         } else null,
         trailingContent = {
-            Box {
-                IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, "Seçenekler") }
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    menu { expanded = false }
+            if (selected != null) {
+                Checkbox(checked = selected, onCheckedChange = { onClick() })
+            } else {
+                Box {
+                    IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, "Seçenekler") }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        menu { expanded = false }
+                    }
                 }
             }
         },
     )
+}
+
+/** Çoklu seçim modunda başlık yerine gösterilen çubuk. */
+@Composable
+private fun SelectionBar(
+    count: Int,
+    onClose: () -> Unit,
+    onSelectAll: () -> Unit,
+    actions: @Composable () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Seçimi kapat") }
+        Text("$count seçili", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f).padding(start = 4.dp))
+        IconButton(onClick = onSelectAll) { Icon(Icons.Default.SelectAll, "Tümünü seç") }
+        actions()
+    }
 }
 
 // ---------------- Çalma listeleri ----------------
@@ -683,6 +757,9 @@ private fun PlaylistDetail(
     onRename: (String) -> Unit,
     onMove: (Track, Int) -> Unit,
     onAddTracks: (List<String>) -> Unit,
+    onRemoveMany: (List<Track>) -> Unit,
+    onSelAddToPlaylist: (List<Track>) -> Unit,
+    onSelDelete: (List<Track>) -> Unit,
     customCover: File?,
     onCover: (android.net.Uri?) -> Unit,
     sira: Siralama,
@@ -691,6 +768,10 @@ private fun PlaylistDetail(
     val c = MaterialTheme.colorScheme
     var editing by rememberSaveable { mutableStateOf(false) }
     var order by remember(playlist.id) { mutableStateOf(sira) }
+    var selected by remember(playlist.id) { mutableStateOf(setOf<String>()) }
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting) { selected = emptySet() }
+    fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
     val byId = remember(library) { library.associateBy { it.id } }
     val manual = remember(playlist, byId) { playlist.trackIds.mapNotNull { byId[it] } }
     // Düzenlerken her zaman listenin kendi sırası gösterilir
@@ -705,6 +786,26 @@ private fun PlaylistDetail(
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
+            if (selecting) {
+                SelectionBar(
+                    count = selected.size,
+                    onClose = { selected = emptySet() },
+                    onSelectAll = {
+                        val ids = songs.map { it.id }.toSet()
+                        selected = if (selected.containsAll(ids)) emptySet() else ids
+                    },
+                ) {
+                    IconButton(onClick = { onRemoveMany(songs.filter { it.id in selected }); selected = emptySet() }) {
+                        Icon(Icons.Default.RemoveCircleOutline, "Listeden çıkar")
+                    }
+                    IconButton(onClick = { onSelAddToPlaylist(songs.filter { it.id in selected }); selected = emptySet() }) {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Başka listeye ekle")
+                    }
+                    IconButton(onClick = { onSelDelete(songs.filter { it.id in selected }); selected = emptySet() }) {
+                        Icon(Icons.Default.Delete, "Telefondan sil", tint = c.error)
+                    }
+                }
+            } else
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(4.dp)) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
                 Spacer(Modifier.weight(1f))
@@ -805,7 +906,12 @@ private fun PlaylistDetail(
                     },
                 )
             } else {
-                TrackRow(t, coverOf(t), t.id == currentId, onClick = { onPlay(songs, i, null) }) { close ->
+                TrackRow(
+                    t, coverOf(t), t.id == currentId,
+                    onClick = { if (selecting) toggle(t.id) else onPlay(songs, i, null) },
+                    selected = if (selecting) t.id in selected else null,
+                    onLongClick = { toggle(t.id) },
+                ) { close ->
                     if (order == Siralama.LISTE) {
                         DropdownMenuItem(text = { Text("Yukarı taşı") }, onClick = { close(); onMove(t, -1) })
                         DropdownMenuItem(text = { Text("Aşağı taşı") }, onClick = { close(); onMove(t, 1) })
