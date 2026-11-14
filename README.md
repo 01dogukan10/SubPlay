@@ -42,10 +42,19 @@ Kotlin + Jetpack Compose + Media3 (ExoPlayer) + yt-dlp ile yazıldı.
 ### Güncelleme
 - İndirici (yt-dlp) günde bir kez kendini günceller. YouTube indirmeleri hata verirse: **Ayarlar → İndiriciyi güncelle**.
 - Uygulama her açılışta ve arka planda saat başı GitHub Releases'a bakar. Yeni sürüm varsa pencere/bildirim çıkar; **Güncelle** APK'yı indirip Android'in kurulum ekranını açar.
-- Repo gizli olduğu için **Ayarlar → GitHub token** kısmına salt-okunur (Contents: Read-only) bir token girilmelidir.
+- Repo herkese açık (public) olmalı; token gerekmez.
+
+### Diğer
+- **Sıralama:** kütüphanede ve listelerde eklenme tarihi, isim, sanatçı (baştaki The/A/An sayılmaz) ya da listenin kendi sırası.
+- **Çoklu seçim:** şarkıya basılı tut → sil, listeye ekle, listeden çıkar, paylaş.
+- **Listeler:** adını değiştir, şarkı ekle/çıkar, ▲▼ ile sırala, galeriden kapak seç.
+- **Hızlı kaydırma çubuğu:** sağ kenardan sürükle; baloncukta harf/tarih görünür.
+- **Paylaşma:** listeyi metin olarak (Toplu ekle'ye yapıştırılabilir) ya da şarkı dosyalarını gönder.
+- **Spotify girişi:** kendi listelerinin tamamı (100 sınırı olmadan) ve beğenilen şarkılar.
+- **Yedekle / Yedekten geri yükle:** şarkılar, kapaklar ve listeler bir klasöre kopyalanır, başka telefona ya da yeni kuruluma taşınır.
 
 ## Dosyalar nerede?
-- Şarkılar: `Android/data/com.dogukan.muzik/files/Music/`
+- Şarkılar: `Android/data/com.subplay.muzik/files/Music/`
 - Kapaklar, kütüphane ve listeler uygulamanın kendi klasöründe tutulur. Uygulama kaldırılırsa hepsi silinir.
 
 ## Derleme

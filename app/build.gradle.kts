@@ -9,7 +9,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.dogukan.muzik"
+        applicationId = "com.subplay.muzik" // klasör: Android/data/com.subplay.muzik/
         minSdk = 24
         targetSdk = 34
         val yapi = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()

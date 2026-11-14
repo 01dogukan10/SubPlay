@@ -52,14 +52,23 @@ Güncelleme
   - Uygulama güncellemesi: her açılışta ve arka planda saat başı GitHub
     Releases'a bakar. Yeni sürüm varsa pencere/bildirim çıkar, "Güncelle"
     APK'yı indirip Android'in kurulum ekranını açar.
-    Repo gizli olduğu için Ayarlar -> GitHub token kısmına salt-okunur
-    (Contents: Read-only) bir token girilmelidir.
+    Repo herkese açık (public) olmalı; token gerekmez.
+
+Diğer
+  - Sıralama: eklenme tarihi, isim, sanatçı (baştaki The/A/An sayılmaz),
+    listede kendi sırası.
+  - Çoklu seçim: şarkıya basılı tut -> sil, listeye ekle, listeden çıkar, paylaş.
+  - Listeler: adını değiştir, şarkı ekle/çıkar, sırala, galeriden kapak seç.
+  - Hızlı kaydırma çubuğu (sağ kenar).
+  - Paylaşma: metin listesi ya da şarkı dosyaları.
+  - Spotify girişi: kendi listelerinin tamamı ve beğenilen şarkılar.
+  - Yedekle / Yedekten geri yükle: şarkılar, kapaklar ve listeler bir klasöre.
 
 
 DOSYALAR NEREDE?
 ----------------
 
-  Şarkılar:  Android/data/com.dogukan.muzik/files/Music/
+  Şarkılar:  Android/data/com.subplay.muzik/files/Music/
   Kapaklar, kütüphane ve listeler uygulamanın kendi klasöründe tutulur.
   Uygulama kaldırılırsa hepsi silinir.
 
