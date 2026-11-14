@@ -230,7 +230,7 @@ fun App(
                         spotifyClientId = com.dogukan.muzik.data.SpotifyApi.clientId(ctx),
                         onSpotifyClientId = { com.dogukan.muzik.data.SpotifyApi.setClientId(ctx, it) },
                         onSpotifyLogin = {
-                            com.dogukan.muzik.data.SpotifyApi.loginIntent(ctx)?.let { runCatching { ctx.startActivity(it) } }
+                            vm.repo.startSpotifyLogin()?.let { runCatching { ctx.startActivity(it) } }
                         },
                         onSpotifyLogout = { com.dogukan.muzik.data.SpotifyApi.logout(ctx) },
                         onImportLiked = { vm.repo.importLikedSongs(); tab = 0 },

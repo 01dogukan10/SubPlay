@@ -491,6 +491,61 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     // ---------------- Spotify ----------------
 
+    private var loginServer: java.net.ServerSocket? = null
+
+    /**
+     * Spotify girişini başlatır: telefonda 127.0.0.1 üzerinde geçici bir dinleyici açar,
+     * tarayıcı giriş sonrası oraya döndüğünde kodu alır. Açılacak tarayıcı Intent'ini döndürür.
+     */
+    fun startSpotifyLogin(): android.content.Intent? {
+        val intent = SpotifyApi.loginIntent(ctx) ?: return null
+        runCatching { loginServer?.close() }
+        val server = try {
+            java.net.ServerSocket(SpotifyApi.PORT, 4, java.net.InetAddress.getByName("127.0.0.1"))
+        } catch (e: Exception) {
+            _notices.tryEmit("Giriş dinleyicisi açılamadı: ${e.message}")
+            return null
+        }
+        loginServer = server
+        server.soTimeout = 5 * 60_000
+        scope.launch {
+            try {
+                while (true) {
+                    val sock = server.accept()
+                    val line = sock.getInputStream().bufferedReader().readLine().orEmpty()
+                    val path = line.split(' ').getOrNull(1).orEmpty()
+                    val isCallback = path.startsWith("/callback")
+                    val html = if (isCallback) {
+                        "<html><head><meta name=viewport content='width=device-width'>" +
+                            "<script>setTimeout(function(){location.href='submuzik://spotify-callback?done=1'},300)</script></head>" +
+                            "<body style='font-family:sans-serif;background:#0d0d10;color:#eee;text-align:center;padding-top:30vh'>" +
+                            "<h2>Spotify girişi tamam</h2><p><a style='color:#1db954' href='submuzik://spotify-callback?done=1'>SubMüzik'e dön</a></p></body></html>"
+                    } else ""
+                    val bytes = html.toByteArray()
+                    sock.getOutputStream().use { o ->
+                        o.write(("HTTP/1.1 ${if (isCallback) "200 OK" else "404 Not Found"}\r\n" +
+                            "Content-Type: text/html; charset=utf-8\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n").toByteArray())
+                        o.write(bytes)
+                    }
+                    sock.close()
+                    if (isCallback) {
+                        SpotifyApi.finishLogin(ctx, android.net.Uri.parse("http://127.0.0.1$path"))
+                        _notices.tryEmit("Spotify'a bağlandın. Artık listelerin tamamı gelir.")
+                        break
+                    }
+                }
+            } catch (e: java.net.SocketTimeoutException) {
+                // kullanıcı girişi bitirmedi
+            } catch (e: Exception) {
+                if (!server.isClosed) _notices.tryEmit(friendly(e))
+            } finally {
+                runCatching { server.close() }
+                if (loginServer === server) loginServer = null
+            }
+        }
+        return intent
+    }
+
     fun finishSpotifyLogin(data: android.net.Uri) {
         scope.launch {
             try {

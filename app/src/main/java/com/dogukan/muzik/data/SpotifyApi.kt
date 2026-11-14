@@ -20,7 +20,9 @@ import java.security.SecureRandom
  * Not (Şubat 2026 kuralları): liste şarkıları sadece kullanıcının kendi / ortak listeleri için verilir.
  */
 object SpotifyApi {
-    const val REDIRECT = "submuzik://spotify-callback"
+    const val PORT = 43117
+    /** Spotify panelinde birebir bu adres kayıtlı olmalı. */
+    const val REDIRECT = "http://127.0.0.1:$PORT/callback"
     private const val SCOPES = "playlist-read-private playlist-read-collaborative user-library-read"
     private const val API = "https://api.spotify.com/v1"
 

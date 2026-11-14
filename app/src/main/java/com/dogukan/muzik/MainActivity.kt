@@ -61,7 +61,9 @@ class MainActivity : ComponentActivity() {
     /** Tarayıcıdan "Paylaş → Müzik" ile gelen linki yakala. */
     private fun handleIntent(i: Intent?) {
         if (i?.action == Intent.ACTION_VIEW && i.data?.scheme == "submuzik") {
-            i.data?.let { com.dogukan.muzik.data.MusicRepository.get(this).finishSpotifyLogin(it) }
+            // "done" ise sadece uygulamaya dönüş; kod geldiyse girişi tamamla
+            i.data?.takeIf { it.getQueryParameter("code") != null || it.getQueryParameter("error") != null }
+                ?.let { com.dogukan.muzik.data.MusicRepository.get(this).finishSpotifyLogin(it) }
             return
         }
         if (i?.action != Intent.ACTION_SEND) return
