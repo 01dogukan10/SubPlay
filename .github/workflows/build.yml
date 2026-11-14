@@ -42,7 +42,9 @@ jobs:
             git log -1 --format=%B | grep -v -E '^(Co-Authored-By|Claude-Session):' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}'
             echo "SURUMNOTU_SONU"
           } >> "$GITHUB_OUTPUT"
+      # Sadece ana dal (main) yayınlanır; diğer dallar yalnızca derlenip kontrol edilir
       - uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
         with:
           tag_name: v${{ steps.surum.outputs.no }}
           name: Sürüm ${{ steps.surum.outputs.no }}
