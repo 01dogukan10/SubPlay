@@ -14,6 +14,11 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ShuffleOrder
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -38,7 +43,9 @@ object SiraKomut {
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
 object MedyaOge {
     fun of(repo: MusicRepository, t: Track, kuyruk: Boolean = false): MediaItem {
-        val uri = Uri.fromFile(repo.fileOf(t))
+        // İndirilmişse dosyadan, değilse internetten (servis "subplay://akis/..." adresini çözer)
+        val file = repo.fileOf(t)
+        val uri = if (t.indirildi && file.exists()) Uri.fromFile(file) else Uri.parse("subplay://akis/${t.id}")
         val extras = Bundle().apply {
             putBoolean("kuyruk", kuyruk)
             putString("uid", UUID.randomUUID().toString())
@@ -70,10 +77,21 @@ class PlaybackService : MediaSessionService() {
     private val main = Handler(Looper.getMainLooper())
     private var oncekiUid: String? = null
     private var oncekiKuyrukta = false
+    private var artArdaHata = 0
 
     override fun onCreate() {
         super.onCreate()
+        // İndirilmemiş şarkılar: "subplay://akis/<id>" adresi çalınacağı an gerçek internet adresine çevrilir
+        val repo = MusicRepository.get(this)
+        val http = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+        val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(this, http)) { spec ->
+            if (spec.uri.scheme == "subplay") spec.withUri(Uri.parse(repo.streamUrl(spec.uri.lastPathSegment.orEmpty())))
+            else spec
+        }
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(resolving))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -99,7 +117,31 @@ class PlaybackService : MediaSessionService() {
                 prefs.edit().putInt("tekrar", mode).apply()
             }
 
+            override fun onPlayerError(error: PlaybackException) {
+                // Spotify gibi: çalınamayan şarkıyı (internet yok, video kalkmış) atla
+                val title = player.currentMediaItem?.mediaMetadata?.title ?: "Şarkı"
+                artArdaHata++
+                if (artArdaHata <= 5 && player.hasNextMediaItem()) {
+                    repo.notice("\"$title\" çalınamadı, sonrakine geçildi. İnternet bağlantını kontrol et ya da şarkıyı indir.")
+                    player.seekToNextMediaItem()
+                    player.prepare()
+                    player.play()
+                } else {
+                    repo.notice("\"$title\" çalınamadı. İndirilmemiş şarkılar için internet gerekir.")
+                    artArdaHata = 0
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) artArdaHata = 0
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Sıradaki şarkının internet adresini önceden bul
+                main.post {
+                    val n = player.nextMediaItemIndex
+                    if (n != C.INDEX_UNSET) repo.prefetchStream(player.getMediaItemAt(n).mediaId)
+                }
                 // Spotify gibi: sıraya eklenen şarkı çalıp bitince sıradan düşer
                 val prevUid = oncekiUid
                 val prevQueued = oncekiKuyrukta

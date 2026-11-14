@@ -46,6 +46,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.filled.DownloadDone
+import androidx.compose.material.icons.filled.PhonelinkErase
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -150,7 +152,10 @@ fun App(
     LaunchedEffect(Unit) { vm.repo.notices.collect { notices = notices + it } }
     var bulkInitial by remember { mutableStateOf("") }
     var pickPlaylistFor by remember { mutableStateOf<List<Track>?>(null) }
-    var confirmDelete by remember { mutableStateOf<List<Track>?>(null) }
+    var confirmDelete by remember { mutableStateOf<List<Track>?>(null) }      // kütüphaneden kaldır
+    var confirmFileDelete by remember { mutableStateOf<List<Track>?>(null) }  // sadece telefondan sil
+    var indirAyari by remember { mutableStateOf(vm.repo.indirVarsayilan) }
+    val setIndir: (Boolean) -> Unit = { indirAyari = it; vm.repo.indirVarsayilan = it }
     var editTrack by remember { mutableStateOf<Track?>(null) }
 
     val coverOf: (Track) -> File? = { vm.repo.coverOf(it) }
@@ -188,7 +193,12 @@ fun App(
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
         DropdownMenuItem(text = { Text("Paylaş") }, onClick = { close(); Paylas.dosyalar(ctx, t.title, listOf(vm.repo.fileOf(t))) })
-        DropdownMenuItem(text = { Text("Sil") }, onClick = { close(); confirmDelete = listOf(t) })
+        if (!t.indirildi) {
+            DropdownMenuItem(text = { Text("İndir") }, onClick = { close(); vm.repo.downloadTracks(listOf(t)); toast("İndiriliyor") })
+        } else {
+            DropdownMenuItem(text = { Text("Telefondan sil") }, onClick = { close(); confirmFileDelete = listOf(t) })
+        }
+        DropdownMenuItem(text = { Text("Kütüphaneden kaldır") }, onClick = { close(); confirmDelete = listOf(t) })
     }
 
     Box(Modifier.fillMaxSize().background(arkaPlan())) {
@@ -250,6 +260,8 @@ fun App(
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
+                        onSelDeleteFile = { confirmFileDelete = it },
+                        onSelDownload = { vm.repo.downloadTracks(it); toast("İndirme başladı") },
                         fileOf = vm.repo::fileOf,
                         sira = libSort,
                         onSira = { libSort = it; vm.repo.setSiralama("kutuphane", it) },
@@ -270,6 +282,8 @@ fun App(
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
+                        onSelDeleteFile = { confirmFileDelete = it },
+                        onSelDownload = { vm.repo.downloadTracks(it); toast("İndirme başladı") },
                         fileOf = vm.repo::fileOf,
                         customCover = vm.repo.playlistCover(openPl),
                         onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
@@ -297,7 +311,7 @@ fun App(
                             vm.repo.startSpotifyLogin()?.let { runCatching { ctx.startActivity(it) } }
                         },
                         onSpotifyLogout = { com.dogukan.muzik.data.SpotifyApi.logout(ctx) },
-                        onImportLiked = { vm.repo.importLikedSongs(); tab = 0 },
+                        onImportLiked = { vm.repo.importLikedSongs(vm.repo.indirVarsayilan); tab = 0 },
                     )
                 }
             }
@@ -327,19 +341,26 @@ fun App(
         AddDialog(
             initial = addInitial,
             onDismiss = { showAdd = false },
-            onAdd = { url, title -> vm.repo.startDownload(url, title); showAdd = false },
+            onAdd = { url, title -> vm.repo.startDownload(url, title, indirAyari); showAdd = false },
             onSearch = vm.repo::search,
-            onPick = { vm.repo.downloadSearchResult(it); showAdd = false },
+            onPick = {
+                vm.repo.downloadSearchResult(it, indirAyari); showAdd = false
+                if (!indirAyari) toast("Kütüphaneye eklendi")
+            },
+            indir = indirAyari,
+            onIndir = setIndir,
             onBulk = { showAdd = false; bulkInitial = ""; showBulk = true },
         )
     }
 
     if (showBulk) {
         BulkDialog(
+            indir = indirAyari,
+            onIndir = setIndir,
             initial = bulkInitial,
             onDismiss = { showBulk = false },
             onImport = { text, name ->
-                val r = vm.repo.bulkImport(text, name)
+                val r = vm.repo.bulkImport(text, name, indirAyari)
                 showBulk = false
                 toast(
                     when {
@@ -410,15 +431,29 @@ fun App(
     confirmDelete?.let { list ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text(if (list.size == 1) "Şarkı silinsin mi?" else "${list.size} şarkı silinsin mi?") },
+            title = { Text(if (list.size == 1) "Kütüphaneden kaldırılsın mı?" else "${list.size} şarkı kütüphaneden kaldırılsın mı?") },
             text = {
                 Text(
-                    if (list.size == 1) "\"${list[0].title}\" telefondan silinecek ve tüm listelerden çıkarılacak."
-                    else "Seçilen ${list.size} şarkı telefondan silinecek ve tüm listelerden çıkarılacak."
+                    (if (list.size == 1) "\"${list[0].title}\"" else "Seçilen ${list.size} şarkı") +
+                        " kütüphaneden ve tüm listelerden çıkarılacak. İndirilmişse telefondaki dosyası da silinir."
                 )
             },
-            confirmButton = { TextButton(onClick = { vm.deleteTracks(list); confirmDelete = null }) { Text("Sil") } },
+            confirmButton = { TextButton(onClick = { vm.deleteTracks(list); confirmDelete = null }) { Text("Kaldır") } },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Vazgeç") } },
+        )
+    }
+
+    confirmFileDelete?.let { list ->
+        val n = list.count { it.indirildi }
+        AlertDialog(
+            onDismissRequest = { confirmFileDelete = null },
+            title = { Text(if (n <= 1) "Telefondan silinsin mi?" else "$n şarkı telefondan silinsin mi?") },
+            text = {
+                Text("Dosya telefondan silinir ama şarkı kütüphanede ve listelerinde kalır. " +
+                    "İnternet varken çalmaya devam eder, istediğinde tekrar indirebilirsin.")
+            },
+            confirmButton = { TextButton(onClick = { vm.deleteFiles(list); confirmFileDelete = null }) { Text("Telefondan sil") } },
+            dismissButton = { TextButton(onClick = { confirmFileDelete = null }) { Text("Vazgeç") } },
         )
     }
 
@@ -463,6 +498,8 @@ private fun LibraryScreen(
     onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
+    onSelDeleteFile: (List<Track>) -> Unit,
+    onSelDownload: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
     sira: Siralama,
     onSira: (Siralama) -> Unit,
@@ -478,9 +515,10 @@ private fun LibraryScreen(
     val selecting = selected.isNotEmpty()
     BackHandler(enabled = selecting) { selected = emptySet() }
     fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
-    val filtered = remember(tracks, query, sira) {
+    var sadeceIndirilen by rememberSaveable { mutableStateOf(false) }
+    val filtered = remember(tracks, query, sira, sadeceIndirilen) {
         val q = query.trim().lowercase(TR)
-        val sorted = tracks.sirala(sira)
+        val sorted = tracks.sirala(sira).let { l -> if (sadeceIndirilen) l.filter { it.indirildi } else l }
         if (q.isEmpty()) sorted
         else sorted.filter { it.title.lowercase(TR).contains(q) || it.artist.lowercase(TR).contains(q) }
     }
@@ -502,9 +540,11 @@ private fun LibraryScreen(
                 IconButton(onClick = { onSelAddToPlaylist(tracks.filter { it.id in selected }); selected = emptySet() }) {
                     Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Listeye ekle")
                 }
-                IconButton(onClick = { onSelDelete(tracks.filter { it.id in selected }); selected = emptySet() }) {
-                    Icon(Icons.Default.Delete, "Sil", tint = c.error)
-                }
+                SelectionMore(
+                    onDownload = { onSelDownload(tracks.filter { it.id in selected }); selected = emptySet() },
+                    onDeleteFile = { onSelDeleteFile(tracks.filter { it.id in selected }); selected = emptySet() },
+                    onRemove = { onSelDelete(tracks.filter { it.id in selected }); selected = emptySet() },
+                )
             }
         } else {
             ScreenTitle("Kütüphane") {
@@ -520,6 +560,12 @@ private fun LibraryScreen(
             )
             val active = downloads.count { it.error == null }
             val failed = downloads.size - active
+            val indirilen = tracks.count { it.indirildi }
+            if (indirilen != tracks.size || sadeceIndirilen) {
+                Box(Modifier.clickable { sadeceIndirilen = !sadeceIndirilen }) {
+                    StatChip(if (sadeceIndirilen) "✓ $indirilen indirildi" else "$indirilen indirildi", highlight = sadeceIndirilen)
+                }
+            }
             if (active > 0) StatChip("$active indiriliyor")
             if (failed > 0) StatChip("$failed hata")
             Spacer(Modifier.weight(1f))
@@ -717,8 +763,17 @@ private fun TrackRow(
                 color = if (playing) c.primary else c.onSurface,
                 fontWeight = if (playing) FontWeight.Bold else FontWeight.Medium)
         },
-        supportingContent = if (t.artist.isNotBlank()) {
-            { Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) }
+        supportingContent = if (t.artist.isNotBlank() || t.indirildi) {
+            {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Spotify gibi: indirilmiş şarkının yanında renkli ok
+                    if (t.indirildi) {
+                        Icon(Icons.Default.DownloadDone, "İndirildi", tint = c.primary, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant)
+                }
+            }
         } else null,
         trailingContent = {
             if (selected != null) {
@@ -733,6 +788,24 @@ private fun TrackRow(
             }
         },
     )
+}
+
+/** Seçim çubuğundaki ⋮: indir, telefondan sil, kütüphaneden kaldır. */
+@Composable
+private fun SelectionMore(onDownload: () -> Unit, onDeleteFile: () -> Unit, onRemove: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Default.MoreVert, "Diğer") }
+        DropdownMenu(open, { open = false }) {
+            DropdownMenuItem(text = { Text("İndir") }, leadingIcon = { Icon(Icons.Default.Download, null) },
+                onClick = { open = false; onDownload() })
+            DropdownMenuItem(text = { Text("Telefondan sil") }, leadingIcon = { Icon(Icons.Default.PhonelinkErase, null) },
+                onClick = { open = false; onDeleteFile() })
+            DropdownMenuItem(text = { Text("Kütüphaneden kaldır") },
+                leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                onClick = { open = false; onRemove() })
+        }
+    }
 }
 
 /** Çoklu seçim modunda başlık yerine gösterilen çubuk. */
@@ -899,6 +972,8 @@ private fun PlaylistDetail(
     onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
+    onSelDeleteFile: (List<Track>) -> Unit,
+    onSelDownload: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
     customCover: File?,
     onCover: (android.net.Uri?) -> Unit,
@@ -947,9 +1022,11 @@ private fun PlaylistDetail(
                     IconButton(onClick = { onSelAddToPlaylist(songs.filter { it.id in selected }); selected = emptySet() }) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "Başka listeye ekle")
                     }
-                    IconButton(onClick = { onSelDelete(songs.filter { it.id in selected }); selected = emptySet() }) {
-                        Icon(Icons.Default.Delete, "Telefondan sil", tint = c.error)
-                    }
+                    SelectionMore(
+                        onDownload = { onSelDownload(songs.filter { it.id in selected }); selected = emptySet() },
+                        onDeleteFile = { onSelDeleteFile(songs.filter { it.id in selected }); selected = emptySet() },
+                        onRemove = { onSelDelete(songs.filter { it.id in selected }); selected = emptySet() },
+                    )
                 }
             } else
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(4.dp)) {
@@ -960,7 +1037,15 @@ private fun PlaylistDetail(
                         Icon(Icons.Default.Check, null); Spacer(Modifier.width(4.dp)); Text("Bitti")
                     }
                 } else {
-                    if (songs.isNotEmpty()) ShareMenu(playlist.name, { songs }, fileOf)
+                    if (songs.isNotEmpty()) {
+                        val eksik = songs.count { !it.indirildi }
+                        if (eksik > 0) {
+                            IconButton(onClick = { onSelDownload(songs) }) { Icon(Icons.Default.Download, "$eksik şarkıyı indir") }
+                        } else {
+                            Icon(Icons.Default.DownloadDone, "Hepsi indirildi", tint = c.primary, modifier = Modifier.padding(12.dp))
+                        }
+                        ShareMenu(playlist.name, { songs }, fileOf)
+                    }
                     IconButton(onClick = { editing = true }) { Icon(Icons.Default.Edit, "Düzenle") }
                 }
             }
@@ -1178,6 +1263,8 @@ private fun AddDialog(
     onSearch: suspend (String) -> List<SearchResult>,
     onPick: (SearchResult) -> Unit,
     onBulk: () -> Unit,
+    indir: Boolean,
+    onIndir: (Boolean) -> Unit,
 ) {
     var text by remember { mutableStateOf(initial) }
     var title by remember { mutableStateOf("") }
@@ -1217,6 +1304,7 @@ private fun AddDialog(
                     OutlinedTextField(title, { title = it }, label = { Text("Ad (isteğe bağlı)") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth())
                 }
+                IndirAnahtari(indir, onIndir)
                 if (results.isEmpty() && !searching) {
                     TextButton(onClick = onBulk) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null); Spacer(Modifier.width(6.dp))
@@ -1247,7 +1335,7 @@ private fun AddDialog(
         },
         confirmButton = {
             if (isLink) {
-                TextButton(onClick = { onAdd(input, title.ifBlank { null }) }) { Text("İndir") }
+                TextButton(onClick = { onAdd(input, title.ifBlank { null }) }) { Text(if (indir) "İndir" else "Ekle") }
             } else {
                 TextButton(enabled = input.isNotEmpty() && !searching, onClick = { doSearch() }) { Text("Ara") }
             }
@@ -1258,6 +1346,8 @@ private fun AddDialog(
 
 @Composable
 private fun BulkDialog(
+    indir: Boolean,
+    onIndir: (Boolean) -> Unit,
     initial: String,
     onDismiss: () -> Unit,
     onImport: (String, String?) -> Unit,
@@ -1299,15 +1389,34 @@ private fun BulkDialog(
                 }
                 OutlinedTextField(listName, { listName = it }, label = { Text("Çalma listesi adı (isteğe bağlı)") },
                     singleLine = true, modifier = Modifier.fillMaxWidth())
+                IndirAnahtari(indir, onIndir)
             }
         },
         confirmButton = {
             TextButton(enabled = count > 0, onClick = { onImport(text, listName.ifBlank { null }) }) {
-                Text("Hepsini indir")
+                Text(if (indir) "Hepsini indir" else "Hepsini ekle")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
     )
+}
+
+/** "Telefona indir" aç/kapa: kapalıysa şarkı sadece kütüphaneye eklenir, internetten çalınır. */
+@Composable
+private fun IndirAnahtari(indir: Boolean, onIndir: (Boolean) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onIndir(!indir) }.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text("Telefona indir", fontWeight = FontWeight.SemiBold)
+            Text(
+                if (indir) "İnternetsiz de dinlenebilir" else "Sadece kütüphaneye eklenir, internetten çalınır",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        androidx.compose.material3.Switch(checked = indir, onCheckedChange = onIndir)
+    }
 }
 
 @Composable

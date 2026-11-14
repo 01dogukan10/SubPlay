@@ -37,7 +37,11 @@ data class Track(
     val sourceUrl: String,
     val addedAt: Long,
     val cover: String? = null, // covers/ klasöründeki dosya adı
-)
+    val videoId: String? = null, // YouTube video kimliği (akış ve indirme için)
+) {
+    /** Telefona indirilmiş mi? İndirilmemiş şarkılar internetten akış olarak çalınır. */
+    val indirildi: Boolean get() = fileName.isNotBlank()
+}
 
 data class Playlist(val id: String, val name: String, val trackIds: List<String>, val cover: String? = null)
 
@@ -141,7 +145,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun findExisting(source: String, title: String?, artist: String?): Track? {
         val list = _tracks.value
         list.find { it.sourceUrl == source }?.let { return it }
-        ytId(source)?.let { id -> list.find { ytId(it.sourceUrl) == id }?.let { return it } }
+        ytId(source)?.let { id -> list.find { it.videoId == id || ytId(it.sourceUrl) == id }?.let { return it } }
         val t = title?.let(::norm)?.takeIf { it.isNotEmpty() } ?: return null
         // Sanatçı bilinmiyorsa sadece isimden "aynı şarkı" demek yanlış olur (farklı sanatçıların aynı adlı şarkıları)
         val a = artist?.let(::norm)?.takeIf { it.isNotEmpty() } ?: return null
@@ -199,7 +203,14 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    fun fileOf(t: Track) = File(musicDir, t.fileName)
+    /** İndirilmemiş şarkı için var olmayan bir dosya döner (asla müzik klasörünün kendisi değil). */
+    fun fileOf(t: Track): File = if (t.fileName.isBlank()) File(musicDir, ".yok-${t.id}") else File(musicDir, t.fileName)
+
+    private fun updateTrack(id: String, f: (Track) -> Track): Track? = synchronized(lock) {
+        _tracks.value = _tracks.value.map { if (it.id == id) f(it) else it }
+        saveTracks()
+        _tracks.value.find { it.id == id }
+    }
     fun coverOf(t: Track): File? = t.cover?.let { File(coversDir, it) }?.takeIf { it.exists() }
 
     /** Kapak resmini indirip kaydeder, dosya adını döndürür (başarısızsa null). */
@@ -233,24 +244,39 @@ class MusicRepository private constructor(private val ctx: Context) {
     // ---------------- İndirme ----------------
 
     /** Link türüne göre yönlendir: YouTube, Spotify ya da doğrudan dosya. */
-    fun startDownload(input: String, customTitle: String?) {
+    /** indir=false -> şarkı sadece kütüphaneye eklenir, çalınca internetten akış olarak gelir. */
+    fun startDownload(input: String, customTitle: String?, indir: Boolean = true) {
         val url = input.trim()
         when {
-            isYouTube(url) && isYtPlaylist(url) -> expandYtPlaylist(url)
-            isYouTube(url) -> enqueueYt(url, customTitle, null, null, url)
-            isSpotify(url) -> expandSpotify(url)
-            else -> startDirect(url, customTitle)
+            isYouTube(url) && isYtPlaylist(url) -> expandYtPlaylist(url, indir)
+            isYouTube(url) -> enqueueYt(url, customTitle, null, null, url, indir = indir)
+            isSpotify(url) -> expandSpotify(url, indir)
+            else -> startDirect(url, customTitle, indir)
         }
     }
 
-    fun downloadSearchResult(r: SearchResult) = enqueueYt(r.url, null, null, null, r.title)
+    fun downloadSearchResult(r: SearchResult, indir: Boolean = true) =
+        enqueueYt(r.url, null, null, null, r.title, ytMeta = r.title to r.channel, indir = indir)
+
+    /** İndirilmemiş (ya da telefondan silinmiş) şarkıları indirir. */
+    fun downloadTracks(list: List<Track>) {
+        list.filter { !it.indirildi || !fileOf(it).exists() }.forEach { t ->
+            val src = t.videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: t.sourceUrl
+            when {
+                src.isBlank() -> _notices.tryEmit("\"${t.title}\" için kaynak bilinmiyor, indirilemiyor.")
+                src.startsWith("ytsearch") || isYouTube(src) ->
+                    enqueueYt(src, t.title, t.artist, null, if (t.artist.isBlank()) t.title else "${t.artist} - ${t.title}", existingId = t.id)
+                else -> startDirect(src, t.title, true, existingId = t.id)
+            }
+        }
+    }
 
     /**
      * Toplu ekleme: her satır bir şarkı ("Sanatçı - Şarkı" ya da sadece ad).
      * Numaralar/madde işaretleri temizlenir, Exportify CSV'si de okunur.
      * Daha önce aynı aramayla indirilenler atlanır. Eklenen şarkı sayısını döndürür.
      */
-    fun bulkImport(text: String, playlistName: String?): BulkResult {
+    fun bulkImport(text: String, playlistName: String?, indir: Boolean = true): BulkResult {
         val allLines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
         val linkRe = Regex("https?://\\S+")
         val links = allLines.mapNotNull { l -> linkRe.find(l)?.value?.takeIf { l.startsWith("http") } }
@@ -265,20 +291,20 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
         var count = 0
         var order = 0
-        ytLinks.forEach { if (enqueueYt(it, null, null, plId, it, order = order++)) count++ }
-        if (spotifyLinks.isNotEmpty()) importSpotifyLinks(spotifyLinks, plId, startOrder = order)
+        ytLinks.forEach { if (enqueueYt(it, null, null, plId, it, order = order++, indir = indir)) count++ }
+        if (spotifyLinks.isNotEmpty()) importSpotifyLinks(spotifyLinks, plId, startOrder = order, indir = indir)
         order += spotifyLinks.size * 1000 // Spotify linklerinden sonra gelsinler
         for ((artist, title) in items) {
             val label = if (artist.isBlank()) title else "$artist - $title"
             val query = "ytsearch1:$label audio"
-            if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label, order = order++)) count++
+            if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label, order = order++, indir = indir)) count++
         }
         // Spotify linkleri arka planda tek tek okunur; sayıları sonra ayrıca bildirilir
         return BulkResult(total, count + spotifyLinks.size)
     }
 
     /** Kopyalanan Spotify şarkı linklerini sırayla okuyup indirme kuyruğuna ekler. */
-    private fun importSpotifyLinks(links: List<String>, plId: String?, startOrder: Int = 0) {
+    private fun importSpotifyLinks(links: List<String>, plId: String?, startOrder: Int = 0, indir: Boolean = true) {
         val id = newTask(links.first(), "Spotify linkleri okunuyor (0/${links.size})")
         scope.launch {
             var added = 0; var skipped = 0; var failed = 0
@@ -289,7 +315,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                     items.forEachIndexed { j, (title, artist) ->
                         val label = if (artist.isBlank()) title else "$artist - $title"
                         val ord = startOrder + i * 1000 + j
-                        if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, ord)) added++ else skipped++
+                        if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, ord, indir = indir)) added++ else skipped++
                     }
                 } catch (e: Exception) {
                     failed++
@@ -299,7 +325,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             removeTask(id)
             _notices.tryEmit(
                 buildString {
-                    append("$added şarkı indiriliyor.")
+                    append(if (indir) "$added şarkı indiriliyor." else "$added şarkı kütüphaneye eklendi.")
                     if (skipped > 0) append(" $skipped şarkı zaten vardı, atlandı.")
                     if (failed > 0) append(" $failed link okunamadı.")
                 }
@@ -391,14 +417,22 @@ class MusicRepository private constructor(private val ctx: Context) {
         return line.removePrefix("ERROR: ").take(200)
     }
 
-    private fun startDirect(url: String, customTitle: String?) {
-        val id = newTask(url, url.substringAfterLast('/'))
+    private fun startDirect(url: String, customTitle: String?, indir: Boolean = true, existingId: String? = null) {
+        if (!indir) {
+            findExisting(url, null, null)?.let { return }
+            val stem = runCatching { URLDecoder.decode(url.substringAfterLast('/').substringBefore('?'), "UTF-8") }
+                .getOrDefault("").substringBeforeLast('.')
+            addTrack(Track(UUID.randomUUID().toString(), customTitle?.takeIf { it.isNotBlank() } ?: stem.ifBlank { "Şarkı" },
+                "", "", url, System.currentTimeMillis()))
+            return
+        }
+        val id = newTask(url, customTitle ?: url.substringAfterLast('/'))
         scope.launch {
             try {
-                download(id, url, customTitle)
+                download(id, url, customTitle, existingId)
                 removeTask(id)
             } catch (e: Exception) {
-                fail(id, e) { startDirect(url, customTitle) }
+                fail(id, e) { startDirect(url, customTitle, true, existingId) }
             }
         }
     }
@@ -406,6 +440,11 @@ class MusicRepository private constructor(private val ctx: Context) {
     // ---------------- YouTube (yt-dlp) ----------------
 
     private val prefs = ctx.getSharedPreferences("ayarlar", Context.MODE_PRIVATE)
+
+    /** Eklerken telefona indirilsin mi (son seçim hatırlanır). */
+    var indirVarsayilan: Boolean
+        get() = prefs.getBoolean("indir_varsayilan", true)
+        set(v) = prefs.edit().putBoolean("indir_varsayilan", v).apply()
     private val ytMutex = Mutex()
     private var ytReady = false
     private val ytSlots = Semaphore(2) // aynı anda en fazla 2 indirme
@@ -462,11 +501,18 @@ class MusicRepository private constructor(private val ctx: Context) {
         source: String, title: String?, artist: String?, playlistId: String?, label: String,
         coverUrl: String? = null,
         order: Int? = null,
+        ytMeta: Pair<String, String>? = null, // (YouTube başlığı, kanal) — indirmeden eklerken ad için
+        indir: Boolean = true,
+        existingId: String? = null, // kütüphanedeki indirilmemiş şarkıyı indir
     ): Boolean {
-        // Zaten indirilmişse tekrar indirme; sadece listeye (doğru sırasına) ekle
-        findExisting(source, title, artist)?.let { t ->
+        // Kütüphanede zaten varsa tekrar ekleme; sadece listeye (doğru sırasına) ekle
+        if (existingId == null) findExisting(source, title, artist)?.let { t ->
             if (playlistId != null) placeInPlaylist(playlistId, t.id, order)
             return false
+        }
+        if (!indir) {
+            addOnline(source, title, artist, playlistId, order, coverUrl, ytMeta, label)
+            return true
         }
         // Aynı şarkı zaten iniyorsa ikinci kez indirme; sadece listesini not et
         val inFlight = synchronized(lock) { _downloads.value.any { it.url == source && it.error == null } }
@@ -479,7 +525,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             try {
                 ytSlots.withPermit {
                     ensureYt()
-                    val t = ytDownload(id, source, title, artist, coverUrl)
+                    val t = ytDownload(id, source, title, artist, coverUrl, existingId)
                     if (playlistId != null) placeInPlaylist(playlistId, t.id, order)
                     pendingPlaylists.remove(source)?.forEach { (pl, ord) ->
                         placeInPlaylist(pl, t.id, ord.takeIf { it != Int.MAX_VALUE })
@@ -487,13 +533,13 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                fail(id, e) { enqueueYt(source, title, artist, playlistId, label, coverUrl, order) }
+                fail(id, e) { enqueueYt(source, title, artist, playlistId, label, coverUrl, order, ytMeta, true, existingId) }
             }
         }
         return true
     }
 
-    private fun ytDownload(taskId: String, source: String, title: String?, artist: String?, coverUrl: String?): Track {
+    private fun ytDownload(taskId: String, source: String, title: String?, artist: String?, coverUrl: String?, existingId: String? = null): Track {
         val tmp = File(ctx.cacheDir, "yt_$taskId").apply { mkdirs() }
         try {
             val req = YoutubeDLRequest(source).apply {
@@ -501,7 +547,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 addOption("--no-playlist")
                 addOption("--no-mtime")
                 addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
-                addOption("--print", "after_move:%(title)s\t%(uploader)s\t%(thumbnail)s")
+                addOption("--print", "after_move:%(title)s\t%(uploader)s\t%(thumbnail)s\t%(id)s")
                 addOption("--no-simulate")
             }
             val resp = YoutubeDL.getInstance().execute(req, taskId) { p, _, _ ->
@@ -516,6 +562,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             val ytTitle = part(0)
             val ytUploader = part(1)?.removeSuffix(" - Topic")
             val ytThumb = part(2)
+            val ytVid = part(3)?.takeIf { it.length == 11 }
 
             // Başlık/sanatçı verilmediyse YouTube başlığını temizle: "Sanatçı - Şarkı (Official Video)" -> ayrı ayrı
             var cleanTitle = ytTitle?.let(::temizBaslik)
@@ -532,6 +579,15 @@ class MusicRepository private constructor(private val ctx: Context) {
             val finalTitle = title?.takeIf { it.isNotBlank() } ?: cleanTitle?.ifBlank { null } ?: ytTitle ?: "Şarkı"
             val target = uniqueFile(sanitize(finalTitle).ifBlank { "sarki" }, f.extension.ifBlank { "m4a" })
             f.copyTo(target)
+            if (existingId != null) {
+                // Kütüphanede zaten olan (indirilmemiş) şarkı: sadece dosyasını bağla
+                // Kapak indirme ağ işi: kilidin dışında yap
+                val cur = _tracks.value.find { it.id == existingId }
+                val cov = cur?.cover ?: saveCover(existingId, coverUrl) ?: saveCover(existingId, ytThumb)
+                return updateTrack(existingId) { t ->
+                    t.copy(fileName = target.name, videoId = t.videoId ?: ytVid, cover = t.cover ?: cov)
+                } ?: throw IOException("Şarkı kütüphanede bulunamadı")
+            }
             val newId = UUID.randomUUID().toString()
             val track = Track(
                 id = newId,
@@ -541,6 +597,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 sourceUrl = source,
                 addedAt = System.currentTimeMillis(),
                 cover = saveCover(newId, coverUrl) ?: saveCover(newId, ytThumb),
+                videoId = ytVid,
             )
             addTrack(track)
             return track
@@ -548,6 +605,100 @@ class MusicRepository private constructor(private val ctx: Context) {
             tmp.deleteRecursively()
         }
     }
+
+    /** YouTube başlığı + kanal -> temiz (şarkı, sanatçı). */
+    private fun ytAdSanatci(ytTitle: String, channel: String): Pair<String, String> {
+        val ct = temizBaslik(ytTitle)
+        val sep = listOf(" - ", " – ", " — ").firstOrNull { ct.contains(it) }
+        if (sep != null) {
+            val l = ct.substringBefore(sep).trim(); val r = ct.substringAfter(sep).trim()
+            if (l.isNotEmpty() && r.isNotEmpty()) return r to l
+        }
+        return ct.ifBlank { ytTitle } to temizKanal(channel)
+    }
+
+    /** Şarkıyı indirmeden kütüphaneye ekler (çalınca internetten akış olarak gelir). */
+    private fun addOnline(
+        source: String, title: String?, artist: String?, playlistId: String?, order: Int?,
+        coverUrl: String?, ytMeta: Pair<String, String>?, label: String,
+    ) {
+        // Tek YouTube linki: adını öğrenmek için önce bilgisini al
+        if (title.isNullOrBlank() && ytMeta == null && isYouTube(source)) {
+            val id = newTask(source, "Bilgi alınıyor…")
+            scope.launch {
+                try {
+                    ensureYt()
+                    val req = YoutubeDLRequest(source).apply {
+                        addOption("--no-playlist"); addOption("--skip-download")
+                        addOption("--print", "%(title)s\t%(uploader)s")
+                    }
+                    val line = YoutubeDL.getInstance().execute(req).out.lines().lastOrNull { it.contains('\t') }
+                    val p = line?.split('\t').orEmpty()
+                    addOnline(source, null, artist, playlistId, order, coverUrl,
+                        p.getOrNull(0).orEmpty().ifBlank { label } to p.getOrNull(1).orEmpty(), label)
+                    removeTask(id)
+                } catch (e: Exception) {
+                    fail(id, e) { addOnline(source, title, artist, playlistId, order, coverUrl, ytMeta, label) }
+                }
+            }
+            return
+        }
+        var t = title?.takeIf { it.isNotBlank() }
+        var a = artist?.takeIf { it.isNotBlank() }
+        if (t == null && ytMeta != null) {
+            val (mt, ma) = ytAdSanatci(ytMeta.first, ytMeta.second)
+            t = mt; if (a == null) a = ma
+        }
+        val vid = ytId(source)
+        val newId = UUID.randomUUID().toString()
+        addTrack(Track(newId, t ?: label, a.orEmpty(), "", source, System.currentTimeMillis(), null, vid))
+        if (playlistId != null) placeInPlaylist(playlistId, newId, order)
+        val cu = coverUrl ?: vid?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
+        if (cu != null) scope.launch { saveCover(newId, cu)?.let { c -> updateTrack(newId) { it.copy(cover = c) } } }
+    }
+
+    // ---------------- Akış (indirilmemiş şarkılar) ----------------
+
+    private val streamCache = ConcurrentHashMap<String, Pair<String, Long>>()
+
+    /**
+     * İndirilmemiş şarkının çalınabilir internet adresini bulur (oynatıcı servisi çağırır, bekletir).
+     * YouTube adresleri birkaç saat geçerli olduğu için önbelleğe alınır.
+     */
+    fun streamUrl(trackId: String): String {
+        streamCache[trackId]?.let { if (it.second > System.currentTimeMillis()) return it.first }
+        val t = _tracks.value.find { it.id == trackId } ?: throw IOException("Şarkı kütüphanede yok")
+        val src = t.videoId?.let { "https://www.youtube.com/watch?v=$it" } ?: t.sourceUrl
+        if (src.isBlank()) throw IOException("Şarkının kaynağı bilinmiyor")
+        if (src.startsWith("http") && !isYouTube(src)) return src // doğrudan dosya linki
+        kotlinx.coroutines.runBlocking { ensureYt() }
+        val req = YoutubeDLRequest(src).apply {
+            addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+            addOption("--no-playlist")
+            addOption("--print", "%(id)s")
+            addOption("--print", "urls")
+            addOption("--print", "%(thumbnail)s")
+        }
+        val lines = YoutubeDL.getInstance().execute(req).out.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val vid = lines.firstOrNull { it.length == 11 && !it.startsWith("http") }
+        val url = lines.firstOrNull { it.startsWith("http") && !it.contains("ytimg") && !it.contains("/vi/") }
+            ?: throw IOException("Akış adresi bulunamadı")
+        val thumb = lines.lastOrNull { it.startsWith("http") && (it.contains("ytimg") || it.contains("/vi/")) }
+        streamCache[trackId] = url to System.currentTimeMillis() + 4 * 3600_000L
+        // Bulunan videoyu ve kapağı kaydet: sonraki çalmalar daha hızlı, kapak görünür
+        if (t.videoId == null && vid != null) updateTrack(trackId) { it.copy(videoId = vid) }
+        if (t.cover == null && thumb != null) saveCover(trackId, thumb)?.let { c -> updateTrack(trackId) { it.copy(cover = c) } }
+        return url
+    }
+
+    /** Sıradaki şarkının adresini önceden bul (geçişte bekleme olmasın). */
+    fun prefetchStream(trackId: String) {
+        val t = _tracks.value.find { it.id == trackId } ?: return
+        if (t.indirildi && fileOf(t).exists()) return
+        scope.launch { runCatching { streamUrl(trackId) } }
+    }
+
+    fun notice(msg: String) { _notices.tryEmit(msg) }
 
     /** "(Official Video)", "[Lyrics]", "| Official Audio" gibi ekleri atar. */
     private fun temizBaslik(s: String): String {
@@ -563,7 +714,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun temizKanal(s: String): String =
         s.removeSuffix(" - Topic").replace(Regex("(?i)\\s*vevo$"), "").replace(Regex("(?i)\\s*official$"), "").trim()
 
-    private fun expandYtPlaylist(url: String) {
+    private fun expandYtPlaylist(url: String, indir: Boolean = true) {
         val id = newTask(url, "YouTube listesi okunuyor…")
         scope.launch {
             try {
@@ -578,11 +729,13 @@ class MusicRepository private constructor(private val ctx: Context) {
                     val e = entries.optJSONObject(i) ?: continue
                     val vid = e.optString("id")
                     if (vid.isBlank()) continue
-                    enqueueYt("https://www.youtube.com/watch?v=$vid", null, null, plId, e.optString("title").ifBlank { vid }, order = i)
+                    enqueueYt("https://www.youtube.com/watch?v=$vid", null, null, plId, e.optString("title").ifBlank { vid }, order = i,
+                        ytMeta = e.optString("title").ifBlank { vid } to e.optString("channel").ifBlank { e.optString("uploader") },
+                        indir = indir)
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                fail(id, e) { expandYtPlaylist(url) }
+                fail(id, e) { expandYtPlaylist(url, indir) }
             }
         }
     }
@@ -669,16 +822,20 @@ class MusicRepository private constructor(private val ctx: Context) {
                     val tid = o.optString("id")
                     if (tid.isBlank() || tid in haveIds) continue
                     val name = o.optString("fileName")
-                    val src = songs[name] ?: continue
-                    var target = File(musicDir, name)
-                    if (target.exists() && target.length() != src.length()) {
-                        target = uniqueFile(name.substringBeforeLast('.'), name.substringAfterLast('.', "m4a"))
+                    val src = songs[name]
+                    var target: File? = null
+                    if (name.isNotBlank() && src != null) {
+                        var tf = File(musicDir, name)
+                        if (tf.exists() && tf.length() != src.length()) {
+                            tf = uniqueFile(name.substringBeforeLast('.'), name.substringAfterLast('.', "m4a"))
+                        }
+                        if (!tf.exists()) copyIn(src, tf)
+                        target = tf
                     }
-                    if (!target.exists()) copyIn(src, target)
                     val coverName = o.optString("cover").ifBlank { null }
                     coverName?.let { cn -> covers[cn]?.let { c -> File(coversDir, cn).takeIf { !it.exists() }?.let { copyIn(c, it) } } }
-                    added += Track(tid, o.optString("title"), o.optString("artist"), target.name,
-                        o.optString("sourceUrl"), o.optLong("addedAt"), coverName)
+                    added += Track(tid, o.optString("title"), o.optString("artist"), target?.name ?: "",
+                        o.optString("sourceUrl"), o.optLong("addedAt"), coverName, o.optString("videoId").ifBlank { null })
                 }
 
                 val pls = json.optJSONArray("listeler") ?: JSONArray()
@@ -780,7 +937,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    fun importLikedSongs() {
+    fun importLikedSongs(indir: Boolean = true) {
         val id = newTask("spotify:liked", "Beğenilen şarkılar okunuyor…")
         scope.launch {
             try {
@@ -791,17 +948,17 @@ class MusicRepository private constructor(private val ctx: Context) {
                 var added = 0
                 items.forEachIndexed { i, (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, order = i)) added++
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, order = i, indir = indir)) added++
                 }
                 removeTask(id)
-                _notices.tryEmit("${items.size} beğenilen şarkı bulundu. $added tanesi indiriliyor, ${items.size - added} tanesi zaten vardı.")
+                _notices.tryEmit("${items.size} beğenilen şarkı bulundu. $added tanesi ${if (indir) "indiriliyor" else "kütüphaneye eklendi"}, ${items.size - added} tanesi zaten vardı.")
             } catch (e: Exception) {
-                fail(id, if (e is SpotifyApi.Yasak) IOException("Spotify beğenilen şarkıları vermedi: ${e.message}") else e) { importLikedSongs() }
+                fail(id, if (e is SpotifyApi.Yasak) IOException("Spotify beğenilen şarkıları vermedi: ${e.message}") else e) { importLikedSongs(indir) }
             }
         }
     }
 
-    private fun expandSpotify(url: String) {
+    private fun expandSpotify(url: String, indir: Boolean = true) {
         val id = newTask(url, "Spotify okunuyor…")
         scope.launch {
             try {
@@ -812,7 +969,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 var added = 0
                 items.forEachIndexed { i, (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, i)) added++
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover, i, indir = indir)) added++
                 }
                 removeTask(id)
                 val skipped = items.size - added
@@ -933,7 +1090,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         _downloads.value = _downloads.value.map { if (it.id == id) f(it) else it }
     }
 
-    private fun download(taskId: String, rawUrl: String, customTitle: String?) {
+    private fun download(taskId: String, rawUrl: String, customTitle: String?, existingId: String? = null) {
         var url = try { URL(rawUrl) } catch (e: Exception) { throw IOException("Geçersiz link") }
         lateinit var conn: HttpURLConnection
         var redirects = 0
@@ -1002,6 +1159,11 @@ class MusicRepository private constructor(private val ctx: Context) {
 
         if (!tmp.renameTo(target)) { tmp.copyTo(target, true); tmp.delete() }
 
+        if (existingId != null) {
+            val cov = saveEmbeddedCover(existingId, target)
+            updateTrack(existingId) { it.copy(fileName = target.name, cover = it.cover ?: cov) }
+            return
+        }
         val (tagTitle, tagArtist) = readTags(target)
         val newId = UUID.randomUUID().toString()
         val track = Track(
@@ -1067,6 +1229,14 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     // ---------------- Kütüphane ----------------
 
+    /** Sadece telefondaki dosyayı siler; şarkı kütüphanede kalır (internetten çalınabilir, tekrar indirilebilir). */
+    fun deleteFile(t: Track) = synchronized(lock) {
+        if (t.fileName.isNotBlank()) File(musicDir, t.fileName).delete()
+        _tracks.value = _tracks.value.map { if (it.id == t.id) it.copy(fileName = "") else it }
+        saveTracks()
+    }
+
+    /** Şarkıyı kütüphaneden tamamen kaldırır (dosyası, kapağı ve listelerdeki yeri dahil). */
     fun deleteTrack(t: Track) = synchronized(lock) {
         fileOf(t).delete()
         coverOf(t)?.delete()
@@ -1167,10 +1337,13 @@ class MusicRepository private constructor(private val ctx: Context) {
         val arr = JSONArray(libFile.readText())
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
+            val file = o.optString("fileName")
             Track(o.getString("id"), o.getString("title"), o.optString("artist"),
-                o.getString("fileName"), o.optString("sourceUrl"), o.optLong("addedAt"),
-                o.optString("cover").ifBlank { null })
-        }.filter { File(musicDir, it.fileName).exists() }
+                // Dosyası telefondan silinmiş şarkılar kütüphanede kalır, "indirilmemiş" olur
+                if (file.isNotBlank() && File(musicDir, file).exists()) file else "",
+                o.optString("sourceUrl"), o.optLong("addedAt"),
+                o.optString("cover").ifBlank { null }, o.optString("videoId").ifBlank { null })
+        }
     }.getOrDefault(emptyList())
 
     private fun saveTracks() {
@@ -1178,7 +1351,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         _tracks.value.forEach {
             arr.put(JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist)
                 .put("fileName", it.fileName).put("sourceUrl", it.sourceUrl).put("addedAt", it.addedAt)
-                .put("cover", it.cover ?: ""))
+                .put("cover", it.cover ?: "").put("videoId", it.videoId ?: ""))
         }
         libFile.writeText(arr.toString())
     }

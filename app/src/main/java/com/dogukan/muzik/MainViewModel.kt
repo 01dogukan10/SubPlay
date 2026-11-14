@@ -247,6 +247,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteTracks(list: List<Track>) = list.forEach { deleteTrack(it) }
 
+    /** Sadece telefondaki dosyaları sil; şarkılar kütüphanede kalır ve internetten çalınır. */
+    fun deleteFiles(list: List<Track>) {
+        list.forEach { repo.deleteFile(it) }
+        val ids = list.map { it.id }.toSet()
+        val byId = repo.tracks.value.associateBy { it.id }
+        controller?.let { c ->
+            for (i in 0 until c.mediaItemCount) {
+                val old = c.getMediaItemAt(i)
+                if (old.mediaId in ids && i != c.currentMediaItemIndex) {
+                    byId[old.mediaId]?.let { c.replaceMediaItem(i, it.toMediaItem(MedyaOge.kuyrukta(old))) }
+                }
+            }
+        }
+    }
+
     fun deleteTrack(t: Track) {
         controller?.let { c ->
             for (i in c.mediaItemCount - 1 downTo 0) {
