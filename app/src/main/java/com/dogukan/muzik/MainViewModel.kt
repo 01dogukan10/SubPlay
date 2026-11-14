@@ -44,6 +44,7 @@ data class PlayerUi(
     val position: Long = 0,
     val duration: Long = 0,
     val shuffle: Boolean = false,
+    val akilli: Boolean = false, // akıllı karıştırma (öneri ekleyen)
     val repeat: Int = Player.REPEAT_MODE_OFF,
 )
 
@@ -122,6 +123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         Guncelle.zamanla(app)
+        repo.esitleGerekirse()
         checkUpdate(manual = false)
         future.addListener({
             controller = runCatching { future.get() }.getOrNull()
@@ -200,13 +202,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Yumuşak geçiş ----------
     private val oynaticiPrefs = app.getSharedPreferences("oynatici", android.content.Context.MODE_PRIVATE)
+    var normalize: Boolean
+        get() = oynaticiPrefs.getBoolean("normalize", false)
+        set(v) = oynaticiPrefs.edit().putBoolean("normalize", v).apply()
+
     var gecisSn: Int
         get() = oynaticiPrefs.getInt("gecis_sn", 0)
         set(v) = oynaticiPrefs.edit().putInt("gecis_sn", v).apply()
 
     // ---------- Şarkı sözleri ----------
     suspend fun sozler(trackId: String, sureMs: Long): com.dogukan.muzik.data.Sozler? = withContext(Dispatchers.IO) {
-        val t = repo.tracks.value.find { it.id == trackId } ?: return@withContext null
+        // Öneri şarkıları kütüphanede yok: çalan şarkının bilgisinden geçici bir kayıt oluştur
+        val t = repo.tracks.value.find { it.id == trackId } ?: withContext(Dispatchers.Main) {
+            controller?.currentMediaItem?.takeIf { it.mediaId == trackId }?.let {
+                Track(trackId, it.mediaMetadata.title?.toString().orEmpty(), it.mediaMetadata.artist?.toString().orEmpty(),
+                    "", "", 0L)
+            }
+        } ?: return@withContext null
         com.dogukan.muzik.data.SozKaynagi.getir(getApplication(), t, (sureMs / 1000).toInt())
     }
 
@@ -229,6 +241,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             position = c.currentPosition.coerceAtLeast(0),
             duration = c.duration.coerceAtLeast(0),
             shuffle = c.shuffleModeEnabled,
+            akilli = c.shuffleModeEnabled && _akilli.value,
             repeat = c.repeatMode,
         )
     }
@@ -248,13 +261,67 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (keep.isNotEmpty()) queueTracks(keep, basa = false)
         c.prepare()
         c.play()
+        if (c.shuffleModeEnabled && _akilli.value) onerileriGetir()
     }
 
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
     fun next() { controller?.seekToNext() }
     fun previous() { controller?.seekToPrevious() }
     fun seekTo(ms: Long) { controller?.seekTo(ms); refresh() }
-    fun toggleShuffle() { controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled } }
+    /** Spotify gibi üç durum: kapalı -> karışık -> akıllı karışık (öneri ekler) -> kapalı. */
+    fun toggleShuffle() {
+        val c = controller ?: return
+        when {
+            !c.shuffleModeEnabled -> { setAkilli(false); c.shuffleModeEnabled = true }
+            !_akilli.value -> { setAkilli(true); onerileriGetir() }
+            else -> { setAkilli(false); komut(SiraKomut.ONERI_TEMIZLE); c.shuffleModeEnabled = false }
+        }
+        refresh()
+    }
+
+    // ---------- Akıllı karıştırma ----------
+    private val _akilli = MutableStateFlow(
+        app.getSharedPreferences("oynatici", android.content.Context.MODE_PRIVATE).getBoolean("akilli", false)
+    )
+
+    private fun setAkilli(on: Boolean) {
+        _akilli.value = on
+        getApplication<Application>().getSharedPreferences("oynatici", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("akilli", on).apply()
+    }
+
+    private var oneriIsi: kotlinx.coroutines.Job? = null
+
+    /** Çalan listeye benzeyen şarkıları bulup sıraya serpiştirir. */
+    private fun onerileriGetir() {
+        val c = controller ?: return
+        val byId = repo.tracks.value.associateBy { it.id }
+        val queue = (0 until c.mediaItemCount).mapNotNull { byId[c.getMediaItemAt(it).mediaId] }
+        if (queue.isEmpty()) return
+        val adet = (queue.size / 3).coerceIn(5, 20)
+        oneriIsi?.cancel()
+        oneriIsi = viewModelScope.launch {
+            val list = runCatching { repo.oneriler(queue.shuffled().take(10), adet) }.getOrElse { emptyList() }
+            if (!_akilli.value) return@launch
+            if (list.isEmpty()) { repo.notice("Akıllı karıştırma için öneri bulunamadı. İnternet bağlantını kontrol et."); return@launch }
+            komut(SiraKomut.ONERI_EKLE, Bundle().apply {
+                putStringArray("ids", list.map { it.videoId }.toTypedArray())
+                putStringArray("titles", list.map { it.title }.toTypedArray())
+                putStringArray("artists", list.map { it.artist }.toTypedArray())
+            })
+        }
+    }
+
+    /** ♥: çalan şarkı öneriyse önce kütüphaneye ekler. Beğenildiyse true. */
+    fun begenCalani(): Boolean? {
+        val c = controller ?: return null
+        val item = c.currentMediaItem ?: return null
+        val id = if (item.mediaId.startsWith("oneri:")) {
+            repo.oneriyiEkle(com.dogukan.muzik.data.Oneri(item.mediaId.removePrefix("oneri:"),
+                item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty()))
+        } else item.mediaId
+        return repo.toggleLike(id)
+    }
     fun cycleRepeat() {
         controller?.let {
             it.repeatMode = when (it.repeatMode) {

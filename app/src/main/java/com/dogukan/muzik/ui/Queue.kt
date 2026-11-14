@@ -137,7 +137,9 @@ private fun SiraSatiri(q: SiraOge, onClick: () -> Unit, trailing: (@Composable (
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = { Kapak(q.artwork, Modifier.size(44.dp), corner = 8.dp) },
-        headlineContent = { Text(q.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        headlineContent = {
+            Text((if (q.trackId.startsWith("oneri:")) "✦ " else "") + q.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
         supportingContent = if (q.artist.isNotBlank()) {
             { Text(q.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) }
         } else null,

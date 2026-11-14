@@ -20,7 +20,15 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
+import androidx.media3.session.LibraryResult
+import com.google.common.collect.ImmutableList
+import android.content.SharedPreferences
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.dogukan.muzik.MainActivity
@@ -39,7 +47,9 @@ object SiraKomut {
     const val TEMIZLE = "sira.temizle"
     const val YENI_KUYRUK = "sira.yeni"    // yeni liste çalındı -> (karışıksa) karıştır
     const val UYKU = "uyku"                // dk: Int (>0 dakika, -1 şarkı bitince, 0 kapat)
-    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU)
+    const val ONERI_EKLE = "oneri.ekle"    // ids, titles, artists: String[] (akıllı karıştırma)
+    const val ONERI_TEMIZLE = "oneri.temizle"
+    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE)
 }
 
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
@@ -68,13 +78,49 @@ object MedyaOge {
     }
 
     fun kuyrukta(item: MediaItem?) = item?.mediaMetadata?.extras?.getBoolean("kuyruk") == true
+
+    /** Akıllı karıştırmanın önerdiği, kütüphanede olmayan şarkı (internetten çalar). */
+    fun oneri(videoId: String, title: String, artist: String): MediaItem {
+        val uri = Uri.parse("subplay://yt/$videoId")
+        return MediaItem.Builder()
+            .setMediaId("oneri:$videoId")
+            .setUri(uri)
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setArtist(artist.ifBlank { null })
+                    .setArtworkUri(Uri.parse("https://i.ytimg.com/vi/$videoId/hqdefault.jpg"))
+                    .setExtras(Bundle().apply {
+                        putBoolean("kuyruk", false); putBoolean("oneri", true)
+                        putString("uid", UUID.randomUUID().toString())
+                    })
+                    .build()
+            )
+            .build()
+    }
 }
 
 /** Arka planda çalmayı, bildirim kontrollerini ve çalma sırasını yöneten servis. */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
-class PlaybackService : MediaSessionService() {
+class PlaybackService : MediaLibraryService() {
 
-    private var session: MediaSession? = null
+    private var session: MediaLibrarySession? = null
+    private lateinit var prefs: SharedPreferences
+
+    // Ses efektleri: ekolayzır, bas güçlendirme, ses dengeleme
+    private var eq: Equalizer? = null
+    private var bass: BassBoost? = null
+    private var loud: LoudnessEnhancer? = null
+    private var normCarpan = 1f
+
+    private val prefDinleyici = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when {
+            key == null -> Unit
+            key.startsWith("eq_") || key == "bass" -> efektleriUygula()
+            key == "normalize" -> if (::player.isInitialized) normHesapla(player.currentMediaItem)
+        }
+    }
     private lateinit var player: ExoPlayer
     private val main = Handler(Looper.getMainLooper())
     private var oncekiUid: String? = null
@@ -100,7 +146,6 @@ class PlaybackService : MediaSessionService() {
 
     /** Her 250 ms: ses (yumuşak geçiş + uyku kısması), uyku süresi, dinleme süresi. */
     private fun adim() {
-        val prefs = getSharedPreferences("oynatici", MODE_PRIVATE)
         if (player.isPlaying) dinlenenMs += TICK
         var v = 1f
         val fade = prefs.getInt("gecis_sn", 0) * 1000L
@@ -118,7 +163,7 @@ class PlaybackService : MediaSessionService() {
                 player.pause(); uykuBitis = 0
             } else if (kalan < 10_000) v = minOf(v, kalan / 10_000f) // son 10 saniyede sesi yavaşça kıs
         }
-        v = v.coerceIn(0f, 1f)
+        v = (v * normCarpan).coerceIn(0f, 1f)
         if (kotlin.math.abs(player.volume - v) > 0.01f) player.volume = v
     }
 
@@ -137,6 +182,142 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun efektleriKur(sessionId: Int) {
+        runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }
+        eq = null; bass = null; loud = null
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET) return
+        eq = runCatching { Equalizer(0, sessionId) }.getOrNull()
+        bass = runCatching { BassBoost(0, sessionId) }.getOrNull()
+        loud = runCatching { LoudnessEnhancer(sessionId) }.getOrNull()
+        efektleriUygula()
+        normHesapla(player.currentMediaItem)
+    }
+
+    private fun efektleriUygula() {
+        val acik = prefs.getBoolean("eq_acik", false)
+        eq?.let { e ->
+            runCatching {
+                if (acik) {
+                    val lv = prefs.getString("eq_seviyeler", "").orEmpty().split(',').mapNotNull { it.trim().toIntOrNull() }
+                    for (b in 0 until e.numberOfBands) {
+                        e.setBandLevel(b.toShort(), (lv.getOrNull(b) ?: 0).toShort())
+                    }
+                }
+                e.enabled = acik
+            }
+        }
+        bass?.let { b ->
+            runCatching {
+                val g = prefs.getInt("bass", 0)
+                if (b.strengthSupported && g > 0) b.setStrength(g.coerceIn(0, 1000).toShort())
+                b.enabled = acik && g > 0
+            }
+        }
+    }
+
+    /** Ses dengeleme: ölçülen kazanca göre sesi kıs ya da (en fazla +6 dB) yükselt. */
+    private fun normHesapla(item: MediaItem?) {
+        val g = if (prefs.getBoolean("normalize", false) && item != null && !item.mediaId.startsWith("oneri:"))
+            MusicRepository.get(this).kazancOf(item.mediaId) else null
+        normCarpan = 1f
+        runCatching { loud?.enabled = false }
+        if (g == null) return
+        if (g < 0) {
+            normCarpan = Math.pow(10.0, g / 20.0).toFloat()
+        } else if (g > 0.5f) {
+            runCatching { loud?.setTargetGain((g * 100).toInt()); loud?.enabled = true }
+        }
+    }
+
+    // ---------------- Android Auto: göz atılabilir kütüphane ----------------
+
+    private fun klasor(id: String, title: String) = MediaItem.Builder()
+        .setMediaId(id)
+        .setMediaMetadata(
+            MediaMetadata.Builder().setTitle(title).setIsBrowsable(true).setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build()
+        ).build()
+
+    private fun parcaOge(parent: String, t: Track) = MediaItem.Builder()
+        .setMediaId("parca|$parent|${t.id}")
+        .setMediaMetadata(
+            MediaMetadata.Builder().setTitle(t.title).setArtist(t.artist.ifBlank { null })
+                .setIsBrowsable(false).setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC).build()
+        ).build()
+
+    private fun parcalar(parent: String): List<Track> {
+        val repo = MusicRepository.get(this)
+        val lib = repo.tracks.value
+        val byId = lib.associateBy { it.id }
+        val ist = Istatistik.get(this)
+        return when {
+            parent == "begeni" -> repo.playlists.value.find { it.id == MusicRepository.BEGENI_ID }?.trackIds?.mapNotNull { byId[it] }.orEmpty()
+            parent == "son" -> ist.sonEklenen(lib)
+            parent == "encok" -> ist.enCokDinlenen(lib)
+            parent == "kutuphane" -> {
+                val col = java.text.Collator.getInstance(java.util.Locale("tr"))
+                lib.sortedWith { a, b -> col.compare(a.title, b.title) }
+            }
+            parent.startsWith("liste:") -> repo.playlists.value.find { it.id == parent.removePrefix("liste:") }
+                ?.trackIds?.mapNotNull { byId[it] }.orEmpty()
+            else -> emptyList()
+        }
+    }
+
+    private fun cocuklar(parent: String): List<MediaItem> = when (parent) {
+        "kok" -> listOf(
+            klasor("begeni", "Beğendiklerim"),
+            klasor("listeler", "Çalma listeleri"),
+            klasor("son", "Son eklenenler"),
+            klasor("encok", "En çok dinlediklerim"),
+            klasor("kutuphane", "Tüm şarkılar"),
+        )
+        "listeler" -> MusicRepository.get(this).playlists.value
+            .filter { it.id != MusicRepository.BEGENI_ID }
+            .map { klasor("liste:${it.id}", it.name) }
+        else -> parcalar(parent).map { parcaOge(parent, it) }
+    }
+
+    /** Uygulamadan, Auto'dan ya da bildirimden gelen öğeleri çalınabilir hale getirir. */
+    private fun cozumle(items: List<MediaItem>): MutableList<MediaItem> {
+        val repo = MusicRepository.get(this)
+        val byId by lazy { repo.tracks.value.associateBy { it.id } }
+        return items.mapNotNull { item ->
+            val uri = item.requestMetadata.mediaUri ?: item.localConfiguration?.uri
+            when {
+                uri != null -> item.buildUpon().setUri(uri).build()
+                item.mediaId.startsWith("parca|") -> byId[item.mediaId.substringAfterLast('|')]?.let { MedyaOge.of(repo, it) }
+                else -> byId[item.mediaId]?.let { MedyaOge.of(repo, it) }
+            }
+        }.toMutableList()
+    }
+
+    private fun oneriEkle(items: List<MediaItem>) {
+        if (items.isEmpty() || player.mediaItemCount == 0) return
+        val shuffle = player.shuffleModeEnabled
+        val eski = if (shuffle) karisikSira() else null
+        val blok = sirayiAl(shuffle).size
+        val n0 = player.mediaItemCount
+        player.addMediaItems(n0, items)
+        if (eski != null) {
+            val seq = eski.toMutableList()
+            val cur = seq.indexOf(player.currentMediaItemIndex).coerceAtLeast(0)
+            // Önerileri, sıradakilerden sonra her 3 şarkıda bir araya serpiştir
+            items.indices.forEach { j ->
+                val pos = (cur + 1 + blok + 2 + j * 3).coerceAtMost(seq.size)
+                seq.add(pos, n0 + j)
+            }
+            player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(seq.toIntArray(), System.nanoTime()))
+        }
+    }
+
+    private fun oneriTemizle() {
+        val cur = player.currentMediaItemIndex
+        (0 until player.mediaItemCount).filter { it != cur && player.getMediaItemAt(it).mediaId.startsWith("oneri:") }
+            .sortedDescending().forEach { player.removeMediaItem(it) }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // İndirilmemiş şarkılar: "subplay://akis/<id>" adresi çalınacağı an gerçek internet adresine çevrilir
@@ -145,8 +326,11 @@ class PlaybackService : MediaSessionService() {
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
         val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(this, http)) { spec ->
-            if (spec.uri.scheme == "subplay") spec.withUri(Uri.parse(repo.streamUrl(spec.uri.lastPathSegment.orEmpty())))
-            else spec
+            when {
+                spec.uri.scheme != "subplay" -> spec
+                spec.uri.host == "yt" -> spec.withUri(Uri.parse(repo.streamUrlVideo(spec.uri.lastPathSegment.orEmpty())))
+                else -> spec.withUri(Uri.parse(repo.streamUrl(spec.uri.lastPathSegment.orEmpty())))
+            }
         }
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolving))
@@ -162,7 +346,8 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         // Karışık ve tekrar ayarı uygulama kapanıp açılınca da hatırlansın (Spotify gibi)
-        val prefs = getSharedPreferences("oynatici", MODE_PRIVATE)
+        prefs = getSharedPreferences("oynatici", MODE_PRIVATE)
+        prefs.registerOnSharedPreferenceChangeListener(prefDinleyici)
         player.shuffleModeEnabled = prefs.getBoolean("karisik", false)
         player.repeatMode = prefs.getInt("tekrar", Player.REPEAT_MODE_OFF)
         player.addListener(object : Player.Listener {
@@ -192,6 +377,15 @@ class PlaybackService : MediaSessionService() {
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying) artArdaHata = 0
+                SubPlayWidget.guncelle(this@PlaybackService, player)
+            }
+
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                SubPlayWidget.guncelle(this@PlaybackService, player)
+            }
+
+            override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                efektleriKur(audioSessionId)
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -207,6 +401,8 @@ class PlaybackService : MediaSessionService() {
                 dinlemeyiKaydet()
                 dinlenenId = mediaItem?.mediaId
                 dinlemeBas = System.currentTimeMillis()
+                normHesapla(mediaItem)
+                mediaItem?.mediaId?.takeIf { !it.startsWith("oneri:") }?.let { prefs.edit().putString("son_calan", it).apply() }
                 // Sıradaki şarkının internet adresini önceden bul
                 main.post {
                     val n = player.nextMediaItemIndex
@@ -229,20 +425,98 @@ class PlaybackService : MediaSessionService() {
         })
 
         main.post(tick)
+        efektleriKur(player.audioSessionId)
+        MusicRepository.get(this).sesOlcumuBaslat()
 
         val openApp = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        session = MediaSession.Builder(this, player)
-            .setSessionActivity(openApp)
-            .setCallback(object : MediaSession.Callback {
+        session = MediaLibrarySession.Builder(this, player, object : MediaLibrarySession.Callback {
+                override fun onGetLibraryRoot(
+                    session: MediaLibrarySession,
+                    browser: MediaSession.ControllerInfo,
+                    params: LibraryParams?,
+                ): ListenableFuture<LibraryResult<MediaItem>> =
+                    Futures.immediateFuture(LibraryResult.ofItem(klasor("kok", "SubPlay"), params))
+
+                override fun onGetChildren(
+                    session: MediaLibrarySession,
+                    browser: MediaSession.ControllerInfo,
+                    parentId: String,
+                    page: Int,
+                    pageSize: Int,
+                    params: LibraryParams?,
+                ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                    val all = cocuklar(parentId)
+                    val ps = pageSize.coerceAtLeast(1).toLong()
+                    val from = (page.coerceAtLeast(0) * ps).coerceAtMost(all.size.toLong()).toInt()
+                    val sub = all.subList(from, (from + ps).coerceAtMost(all.size.toLong()).toInt())
+                    return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.copyOf(sub), params))
+                }
+
+                override fun onGetItem(
+                    session: MediaLibrarySession,
+                    browser: MediaSession.ControllerInfo,
+                    mediaId: String,
+                ): ListenableFuture<LibraryResult<MediaItem>> {
+                    val item = if (mediaId.startsWith("parca|")) {
+                        val parts = mediaId.split("|")
+                        MusicRepository.get(this@PlaybackService).tracks.value.find { it.id == parts.getOrNull(2) }
+                            ?.let { parcaOge(parts.getOrElse(1) { "kutuphane" }, it) }
+                    } else cocuklar("kok").find { it.mediaId == mediaId }
+                        ?: cocuklar("listeler").find { it.mediaId == mediaId }
+                        ?: klasor(mediaId, mediaId)
+                    return Futures.immediateFuture(
+                        item?.let { LibraryResult.ofItem(it, null) } ?: LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+                    )
+                }
+
+                // Uygulama kapalıyken widget / kulaklık tuşuyla "çal" denirse: son çalınan şarkıdan devam et
+                override fun onPlaybackResumption(
+                    mediaSession: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+                    val repo = MusicRepository.get(this@PlaybackService)
+                    val lib = repo.tracks.value.sortedByDescending { it.addedAt }
+                    val son = prefs.getString("son_calan", null)
+                    val idx = lib.indexOfFirst { it.id == son }.coerceAtLeast(0)
+                    return Futures.immediateFuture(
+                        MediaSession.MediaItemsWithStartPosition(lib.map { MedyaOge.of(repo, it) }, idx, 0L)
+                    )
+                }
+
+                override fun onSetMediaItems(
+                    mediaSession: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                    mediaItems: MutableList<MediaItem>,
+                    startIndex: Int,
+                    startPositionMs: Long,
+                ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+                    val tek = mediaItems.singleOrNull()
+                    if (tek != null && tek.mediaId.startsWith("parca|")) {
+                        // Android Auto'da bir şarkıya dokunuldu: bulunduğu listenin tamamını o şarkıdan başlat
+                        val parts = tek.mediaId.split("|")
+                        val parent = parts.getOrElse(1) { "kutuphane" }
+                        val list = parcalar(parent)
+                        val idx = list.indexOfFirst { it.id == parts.getOrNull(2) }.coerceAtLeast(0)
+                        val repo = MusicRepository.get(this@PlaybackService)
+                        main.post { if (player.shuffleModeEnabled) karistir() }
+                        return Futures.immediateFuture(
+                            MediaSession.MediaItemsWithStartPosition(list.map { MedyaOge.of(repo, it) }, idx, 0L)
+                        )
+                    }
+                    return Futures.immediateFuture(
+                        MediaSession.MediaItemsWithStartPosition(cozumle(mediaItems), startIndex, startPositionMs)
+                    )
+                }
+
                 override fun onConnect(
                     session: MediaSession,
                     controller: MediaSession.ControllerInfo,
                 ): MediaSession.ConnectionResult {
-                    val cmds = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().apply {
+                    val cmds = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon().apply {
                         SiraKomut.HEPSI.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
                     }.build()
                     return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -269,6 +543,13 @@ class PlaybackService : MediaSessionService() {
                         SiraKomut.TEMIZLE -> sirayiAl().sortedDescending().forEach { player.removeMediaItem(it) }
                         SiraKomut.YENI_KUYRUK -> if (player.shuffleModeEnabled) karistir()
                         SiraKomut.UYKU -> uyku(args.getInt("dk"))
+                        SiraKomut.ONERI_EKLE -> {
+                            val ids = args.getStringArray("ids").orEmpty()
+                            val titles = args.getStringArray("titles").orEmpty()
+                            val artists = args.getStringArray("artists").orEmpty()
+                            oneriEkle(ids.indices.map { MedyaOge.oneri(ids[it], titles.getOrElse(it) { "" }, artists.getOrElse(it) { "" }) })
+                        }
+                        SiraKomut.ONERI_TEMIZLE -> oneriTemizle()
                     }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
@@ -278,14 +559,9 @@ class PlaybackService : MediaSessionService() {
                     mediaSession: MediaSession,
                     controller: MediaSession.ControllerInfo,
                     mediaItems: MutableList<MediaItem>,
-                ): ListenableFuture<MutableList<MediaItem>> {
-                    val resolved = mediaItems.map { item ->
-                        val uri = item.requestMetadata.mediaUri ?: item.localConfiguration?.uri
-                        if (uri != null) item.buildUpon().setUri(uri).build() else item
-                    }.toMutableList()
-                    return Futures.immediateFuture(resolved)
-                }
+                ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(cozumle(mediaItems))
             })
+            .setSessionActivity(openApp)
             .build()
     }
 
@@ -372,7 +648,7 @@ class PlaybackService : MediaSessionService() {
         player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(order, System.nanoTime()))
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         val p = session?.player
@@ -381,6 +657,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         main.removeCallbacks(tick)
+        runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefDinleyici) }
+        runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }
         dinlemeyiKaydet()
         session?.run { player.release(); release() }
         session = null

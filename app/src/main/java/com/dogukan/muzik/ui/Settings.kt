@@ -83,6 +83,10 @@ fun SettingsScreen(
     onGecis: (Int) -> Unit,
     sadeceWifi: Boolean,
     onSadeceWifi: (Boolean) -> Unit,
+    normalize: Boolean,
+    onNormalize: (Boolean) -> Unit,
+    onEkolayzir: () -> Unit,
+    onAdDuzelt: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
@@ -212,6 +216,35 @@ fun SettingsScreen(
                 headlineContent = { Text("Sadece Wi-Fi'de indir") },
                 supportingContent = { Text("Mobil verideyken indirmeler bekler, Wi-Fi gelince devam eder") },
                 trailingContent = { Switch(checked = wifi, onCheckedChange = { wifi = it; onSadeceWifi(it) }) },
+            )
+        }
+
+        Section("Ses") {
+            var norm by remember { mutableStateOf(normalize) }
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { norm = !norm; onNormalize(norm) },
+                headlineContent = { Text("Ses dengeleme") },
+                supportingContent = {
+                    Text("Yüksek ve kısık kaydedilmiş şarkılar aynı seviyede çalar. İndirilmiş şarkılarda çalışır; " +
+                        "şarkıların ses seviyesi arka planda bir kez ölçülür.")
+                },
+                trailingContent = { Switch(checked = norm, onCheckedChange = { norm = it; onNormalize(it) }) },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable(onClick = onEkolayzir),
+                headlineContent = { Text("Ekolayzır") },
+                supportingContent = { Text("Bas, tiz ve hazır ayarlar (Pop, Rock, Caz…)") },
+            )
+        }
+
+        Section("Kütüphane") {
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable(onClick = onAdDuzelt),
+                headlineContent = { Text("Şarkı adlarını düzelt") },
+                supportingContent = { Text("YouTube'dan gelmiş eski şarkılardaki \"(Official Video)\", \"VEVO\" gibi ekleri temizler. Önce önizleme gösterilir.") },
             )
         }
 

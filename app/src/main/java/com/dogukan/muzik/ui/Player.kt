@@ -115,7 +115,11 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
 }
 
 @Composable
-fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit = {}, ekstra: OynaticiEkstra = OynaticiEkstra()) {
+fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit = {}, ekstra: OynaticiEkstra = OynaticiEkstra()) =
+    androidx.compose.runtime.CompositionLocalProvider(LocalAkilli provides ui.akilli) { FullPlayerIc(ui, vm, onClose, onOpenQueue, ekstra) }
+
+@Composable
+private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit, ekstra: OynaticiEkstra) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     var swipe by remember { mutableFloatStateOf(0f) }
@@ -229,7 +233,7 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
                 fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (ui.artist.isNotBlank()) {
                 Text(ui.artist, style = MaterialTheme.typography.titleMedium, color = c.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable(onClick = ekstra.onArtist))
             }
         }
         // ♥ Beğen
@@ -269,9 +273,7 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val off = c.onSurfaceVariant
-        IconButton(onClick = vm::toggleShuffle) {
-            Icon(Icons.Default.Shuffle, "Karışık", tint = if (ui.shuffle) c.primary else off)
-        }
+        IconButton(onClick = vm::toggleShuffle) { KarisikIkon(ui.shuffle) }
         IconButton(onClick = vm::previous, modifier = Modifier.size(56.dp)) {
             Icon(Icons.Default.SkipPrevious, "Önceki", modifier = Modifier.size(40.dp))
         }
@@ -314,6 +316,7 @@ class OynaticiEkstra(
     val onLyrics: () -> Unit = {},
     val uyku: Long? = null,
     val onSleep: (Int) -> Unit = {},
+    val onArtist: () -> Unit = {},
 )
 
 /** ⏾ Uyku zamanlayıcısı: süre seç; açıkken kalan süre görünür. */

@@ -49,6 +49,11 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - **Beğen (♥):** beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
 - **Yumuşak geçiş:** Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
 
+- **Akıllı karıştırma:** 🔀 düğmesine ikinci kez basınca (✦ işareti) listeye benzeyen, kütüphanende olmayan şarkılar da araya karışır. Beğendiğini ♥ ile kütüphanene eklersin.
+- **Ekolayzır ve ses dengeleme:** Ayarlar → Ses. Hazır ayarlar (Pop, Rock, Caz…), bant ayarları, bas güçlendirme; ses dengeleme yüksek ve kısık şarkıları aynı seviyeye getirir.
+- **Ana ekran widget'ı:** ana ekrana uzun bas → Widget'lar → SubPlay.
+- **Android Auto:** SubPlay arabada medya uygulaması olarak görünür. Play Store dışından kurulduğu için Android Auto ayarlarında geliştirici modunu açıp "Bilinmeyen kaynaklar"a izin vermen gerekir.
+
 ### Kütüphane ve listeler
 - **Arama:** üstteki kutuya şarkı ya da sanatçı adı yaz.
 - **Sıralama:** şarkı sayısının yanındaki ⇅ ile isme, sanatçıya ya da eklenme tarihine göre sırala.
@@ -56,6 +61,9 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - **Hızlı kaydırma:** sağ kenardaki ince çubuğu sürükle.
 - **İndirmeden eklemek:** şarkı eklerken "Telefona indir" anahtarını kapatırsan şarkı sadece kütüphaneye eklenir, çalınca internetten gelir. İndirilmiş şarkıların yanında renkli ↓ işareti olur.
 - **Silmek:** şarkının ⋮ menüsünde "Telefondan sil" sadece dosyayı siler (şarkı kütüphanede kalır, internetten çalar); "Kütüphaneden kaldır" şarkıyı tamamen kaldırır.
+- **Sanatçılar ve albümler:** kütüphanenin üstündeki "Sanatçılar" / "Albümler" ile; ya da şarkı menüsünden "Sanatçıya git".
+- **Liste eşitleme:** Spotify ya da YouTube linkiyle eklenen listeler kendiliğinden eşitlenir; kaynağa eklenen yeni şarkılar SubPlay'deki listeye de gelir. Listenin üstündeki ↻ ile hemen eşitleyebilirsin.
+- **Şarkı adlarını düzelt:** Ayarlar → Kütüphane. Eski şarkılardaki "(Official Video)", "VEVO" gibi ekleri önizlemeyle temizler.
 - **Liste düzenlemek:** listeyi aç, sağ üstteki ✏️'ye bas. Adını değiştirebilir, şarkı ekleyip çıkarabilir, ▲▼ ile sırayı değiştirebilir ve galeriden kapak resmi seçebilirsin.
 
 ### Akıllı listeler ve istatistikler

@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +33,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -240,3 +245,22 @@ fun NOutlinedButton(
     else ButtonDefaults.outlinedButtonBorder(enabled),
     content = content,
 )
+
+
+/** Akıllı karıştırma açık mı (karıştırma simgesinde ✦ gösterilir). */
+val LocalAkilli = compositionLocalOf { false }
+
+/** Karıştırma simgesi: açıkken renkli; akıllı karıştırmada yanında ✦. */
+@Composable
+fun KarisikIkon(shuffle: Boolean, size: Dp = 24.dp) {
+    val c = MaterialTheme.colorScheme
+    Box {
+        Icon(androidx.compose.material.icons.Icons.Default.Shuffle,
+            when { !shuffle -> "Karışık kapalı"; LocalAkilli.current -> "Akıllı karışık"; else -> "Karışık açık" },
+            tint = if (shuffle) c.primary else c.onSurfaceVariant, modifier = Modifier.size(size))
+        if (shuffle && LocalAkilli.current) {
+            Icon(androidx.compose.material.icons.Icons.Default.AutoAwesome, null, tint = c.tertiary,
+                modifier = Modifier.size(size * 0.5f).align(Alignment.TopEnd).offset(x = size * 0.25f, y = -size * 0.2f))
+        }
+    }
+}

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.filled.History
@@ -148,6 +149,9 @@ fun App(
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var showLyrics by rememberSaveable { mutableStateOf(false) }
     var openSmart by rememberSaveable { mutableStateOf<String?>(null) }
+    var openGrup by rememberSaveable { mutableStateOf<String?>(null) } // "sanatci|Ad" ya da "album|Ad"
+    var showEq by rememberSaveable { mutableStateOf(false) }
+    var adDuzeltmeler by remember { mutableStateOf<List<com.dogukan.muzik.data.AdDuzeltme>?>(null) }
     val uyku by vm.uyku.collectAsStateWithLifecycle()
     val istatistikSurum by com.dogukan.muzik.data.Istatistik.get(ctx).surum.collectAsStateWithLifecycle()
     val begeniler = remember(playlists) {
@@ -198,6 +202,8 @@ fun App(
     BackHandler(enabled = !showPlayer && tab == 1 && openPlaylistId != null) { openPlaylistId = null }
     BackHandler(enabled = !showPlayer && tab == 1 && openSmart != null) { openSmart = null }
     BackHandler(enabled = showLyrics) { showLyrics = false }
+    BackHandler(enabled = !showPlayer && tab == 0 && openGrup != null) { openGrup = null }
+    BackHandler(enabled = showEq) { showEq = false }
 
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
         DropdownMenuItem(text = { Text("Sıradaki olarak çal") }, onClick = {
@@ -208,6 +214,14 @@ fun App(
         })
         DropdownMenuItem(text = { Text(if (t.id in begeniler) "Beğenmekten vazgeç" else "Beğen") }, onClick = { close(); begen(t) })
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
+        if (t.artist.isNotBlank()) {
+            DropdownMenuItem(text = { Text("Sanatçıya git") }, onClick = {
+                close(); openGrup = "sanatci|" + com.dogukan.muzik.data.anaSanatci(t.artist); tab = 0; openPlaylistId = null
+            })
+        }
+        t.album?.let { al ->
+            DropdownMenuItem(text = { Text("Albüme git") }, onClick = { close(); openGrup = "album|$al"; tab = 0; openPlaylistId = null })
+        }
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
         DropdownMenuItem(text = { Text("Paylaş") }, onClick = { close(); Paylas.dosyalar(ctx, t.title, listOf(vm.repo.fileOf(t))) })
         if (!t.indirildi) {
@@ -220,7 +234,7 @@ fun App(
 
     Box(Modifier.fillMaxSize().background(arkaPlan())) {
       // Şeffaf zeminde yazı/simge rengi temaya göre olsun (koyu modda siyah kalmasın)
-      CompositionLocalProvider(LocalContentColor provides c.onBackground) {
+      CompositionLocalProvider(LocalContentColor provides c.onBackground, LocalAkilli provides player.akilli) {
         Scaffold(
             containerColor = Color.Transparent,
             contentColor = c.onBackground,
@@ -265,12 +279,29 @@ fun App(
             Box(Modifier.padding(pad).fillMaxSize()) {
                 val openPl = playlists.find { it.id == openPlaylistId }
                 when {
+                    tab == 0 && openGrup != null -> {
+                        val (tur, ad) = openGrup!!.split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+                        val liste = remember(openGrup, tracks) {
+                            if (tur == "album") tracks.filter { it.album == ad }
+                            else tracks.filter { com.dogukan.muzik.data.anaSanatci(it.artist).equals(ad, ignoreCase = true) }
+                                .sirala(Siralama.AD_AZ)
+                        }
+                        val albumler = remember(liste) { liste.mapNotNull { it.album }.distinct() }
+                        SmartListScreen(
+                            ad,
+                            if (tur == "album") "Albüm" + (liste.firstOrNull()?.artist?.let { " · $it" } ?: "")
+                            else "Sanatçı" + if (albumler.isNotEmpty()) " · ${albumler.size} albüm" else "",
+                            liste, coverOf, player.currentId, player.shuffle, vm::toggleShuffle,
+                            onPlay = { l, i, sh -> vm.playTracks(l, i, sh) }, onBack = { openGrup = null }, menu = trackMenu,
+                        )
+                    }
                     tab == 0 -> LibraryScreen(
                         tracks, downloads, player.currentId, coverOf,
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
                         onDismissDownload = vm.repo::dismissDownload,
                         onRetryDownload = vm.repo::retryDownload,
                         onRetryAll = vm.repo::retryAllFailed,
+                        onOpenGrup = { openGrup = it },
                         onDismissAll = vm.repo::dismissAllFailed,
                         onSelQueue = { vm.queueTracks(it, basa = false); toast("${it.size} şarkı sıraya eklendi") },
                         shuffle = player.shuffle,
@@ -303,6 +334,8 @@ fun App(
                         onSelDownload = { vm.repo.downloadTracks(it); toast("İndirme başladı") },
                         fileOf = vm.repo::fileOf,
                         customCover = vm.repo.playlistCover(openPl),
+                        onEsitle = { vm.repo.listeyiEsitle(openPl, sessiz = false); toast("Liste eşitleniyor") },
+                        onEsitlemeKapat = { vm.repo.eslitlemeyiKapat(openPl.id); toast("Eşitleme kapatıldı") },
                         onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
                         sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
                         onSira = { vm.repo.setSiralama("liste_${openPl.id}", it) },
@@ -347,6 +380,13 @@ fun App(
                         onGecis = { vm.gecisSn = it },
                         sadeceWifi = vm.repo.sadeceWifi,
                         onSadeceWifi = { vm.repo.sadeceWifi = it },
+                        normalize = vm.normalize,
+                        onNormalize = { vm.normalize = it; if (it) vm.repo.sesOlcumuBaslat() },
+                        onEkolayzir = { showEq = true },
+                        onAdDuzelt = {
+                            val l = vm.repo.adDuzeltmeleri()
+                            if (l.isEmpty()) toast("Düzeltilecek şarkı adı yok") else adDuzeltmeler = l
+                        },
                     )
                 }
             }
@@ -360,8 +400,20 @@ fun App(
             FullPlayer(
                 player, vm, onClose = { showPlayer = false }, onOpenQueue = { showQueue = true },
                 ekstra = OynaticiEkstra(
-                    liked = player.currentId in begeniler,
-                    onLike = { player.currentId?.let { id -> tracks.find { it.id == id }?.let(begen) } },
+                    liked = player.currentId in begeniler || player.currentId?.takeIf { it.startsWith("oneri:") }?.let { o ->
+                        val vid = o.removePrefix("oneri:")
+                        tracks.any { it.videoId == vid && it.id in begeniler }
+                    } == true,
+                    onLike = {
+                        vm.begenCalani()?.let { liked ->
+                            toast(if (liked) "Beğendiklerim'e eklendi" else "Beğendiklerim'den çıkarıldı")
+                        }
+                    },
+                    onArtist = {
+                        player.artist.takeIf { it.isNotBlank() }?.let {
+                            openGrup = "sanatci|" + com.dogukan.muzik.data.anaSanatci(it); tab = 0; showPlayer = false
+                        }
+                    },
                     onLyrics = { showLyrics = true },
                     uyku = uyku,
                     onSleep = { dk ->
@@ -386,6 +438,10 @@ fun App(
             exit = slideOutVertically { it } + fadeOut(),
         ) {
             LyricsScreen(player, vm, onClose = { showLyrics = false })
+        }
+
+        AnimatedVisibility(visible = showEq, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
+            EqualizerScreen(onClose = { showEq = false })
         }
       }
     }
@@ -461,6 +517,32 @@ fun App(
             dismissButton = {
                 TextButton(enabled = !update.downloading, onClick = vm::dismissUpdate) { Text("Sonra") }
             },
+        )
+    }
+
+    adDuzeltmeler?.let { list ->
+        AlertDialog(
+            onDismissRequest = { adDuzeltmeler = null },
+            title = { Text("${list.size} şarkının adı düzeltilecek") },
+            text = {
+                LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                    items(list, key = { it.track.id }) { d ->
+                        Column(Modifier.padding(vertical = 6.dp)) {
+                            Text(d.track.title + if (d.track.artist.isNotBlank()) " · ${d.track.artist}" else "",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text("→ " + d.yeniAd + if (d.yeniSanatci.isNotBlank()) " · ${d.yeniSanatci}" else "",
+                                fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.repo.adlariDuzelt(list); toast("${list.size} şarkının adı düzeltildi"); adDuzeltmeler = null }) {
+                    Text("Düzelt")
+                }
+            },
+            dismissButton = { TextButton(onClick = { adDuzeltmeler = null }) { Text("Vazgeç") } },
         )
     }
 
@@ -548,6 +630,7 @@ private fun LibraryScreen(
     onRetryDownload: (String) -> Unit,
     onRetryAll: () -> Unit,
     onDismissAll: () -> Unit,
+    onOpenGrup: (String) -> Unit,
     onSelQueue: (List<Track>) -> Unit,
     shuffle: Boolean,
     onToggleShuffle: () -> Unit,
@@ -642,6 +725,17 @@ private fun LibraryScreen(
             ),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
+        // Görünüm: şarkılar / sanatçılar / albümler
+        var gorunum by rememberSaveable { mutableStateOf("sarki") }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("sarki" to "Şarkılar", "sanatci" to "Sanatçılar", "album" to "Albümler").forEach { (k, ad) ->
+                androidx.compose.material3.FilterChip(selected = gorunum == k, onClick = { gorunum = k }, label = { Text(ad) })
+            }
+        }
+        if (gorunum != "sarki") {
+            GrupListesi(tracks, query, gorunum, coverOf, onOpenGrup)
+            return@Column
+        }
         if (filtered.isNotEmpty()) {
             PlayControls(
                 shuffle = shuffle,
@@ -988,10 +1082,7 @@ private fun PlayControls(
     val c = MaterialTheme.colorScheme
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            IconButton(onClick = onToggleShuffle) {
-                Icon(Icons.Default.Shuffle, if (shuffle) "Karışık açık" else "Karışık kapalı",
-                    tint = if (shuffle) c.primary else c.onSurfaceVariant, modifier = Modifier.size(28.dp))
-            }
+            IconButton(onClick = onToggleShuffle) { KarisikIkon(shuffle, 28.dp) }
             Box(Modifier.size(5.dp).background(if (shuffle) c.primary else Color.Transparent, CircleShape))
         }
         androidx.compose.material3.FilledIconButton(
@@ -1002,6 +1093,45 @@ private fun PlayControls(
                 containerColor = c.primary, contentColor = c.onPrimary,
             ),
         ) { Icon(Icons.Default.PlayArrow, "Çal", modifier = Modifier.size(32.dp)) }
+    }
+}
+
+/** Sanatçı ya da albüm listesi. */
+@Composable
+private fun GrupListesi(tracks: List<Track>, query: String, tur: String, coverOf: (Track) -> File?, onOpen: (String) -> Unit) {
+    val gruplar = remember(tracks, query, tur) {
+        val q = query.trim().lowercase(TR)
+        val g = if (tur == "album") tracks.filter { !it.album.isNullOrBlank() }.groupBy { it.album!! }
+        else tracks.filter { it.artist.isNotBlank() }.groupBy { com.dogukan.muzik.data.anaSanatci(it.artist) }
+        val col = java.text.Collator.getInstance(TR).apply { strength = java.text.Collator.PRIMARY }
+        g.entries.filter { q.isEmpty() || it.key.lowercase(TR).contains(q) }
+            .sortedWith { a, b -> col.compare(siraAnahtari(a.key), siraAnahtari(b.key)) }
+            .map { Triple(it.key, it.value.size, it.value.firstNotNullOfOrNull(coverOf)) }
+    }
+    if (gruplar.isEmpty()) {
+        EmptyState(
+            if (tur == "album") "Albüm bilgisi olan şarkı yok. YouTube Music'ten inen şarkılarda albüm bilgisi kendiliğinden gelir."
+            else "Sanatçı bulunamadı."
+        )
+        return
+    }
+    val st = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize(), state = st) {
+            items(gruplar, key = { it.first }) { (ad, n, kapak) ->
+                ListItem(
+                    colors = transparentRow(),
+                    modifier = Modifier.clickable { onOpen("$tur|$ad") },
+                    leadingContent = { Kapak(kapak, Modifier.size(56.dp), corner = if (tur == "sanatci") 28.dp else 10.dp) },
+                    headlineContent = { Text(ad, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold) },
+                    supportingContent = { Text("$n şarkı") },
+                )
+            }
+            item { Spacer(Modifier.height(88.dp)) }
+        }
+        FastScroller(st, Modifier.align(Alignment.TopEnd)) { i ->
+            gruplar.getOrNull(i)?.first?.let { siraAnahtari(it).take(1).uppercase(TR).ifBlank { "#" } }
+        }
     }
 }
 
@@ -1062,6 +1192,8 @@ private fun PlaylistDetail(
     onSelDownload: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
     customCover: File?,
+    onEsitle: () -> Unit,
+    onEsitlemeKapat: () -> Unit,
     onCover: (android.net.Uri?) -> Unit,
     sira: Siralama,
     onSira: (Siralama) -> Unit,
@@ -1162,6 +1294,13 @@ private fun PlaylistDetail(
                     }
                     Spacer(Modifier.height(6.dp))
                     StatChip("${songs.size} şarkı", highlight = true)
+                    playlist.kaynak?.let { k ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (k.contains("spotify")) "Spotify ile eşitleniyor" else "YouTube ile eşitleniyor",
+                                style = MaterialTheme.typography.labelMedium, color = c.onSurfaceVariant)
+                            IconButton(onClick = onEsitle) { Icon(Icons.Default.Sync, "Şimdi eşitle", tint = c.primary) }
+                        }
+                    }
                     if (!editing && songs.size > 1) {
                         SortMenu(order, Siralama.entries) { order = it; onSira(it) }
                     }
@@ -1171,6 +1310,9 @@ private fun PlaylistDetail(
                 if (editing) {
                     NButton(onClick = { showPicker = true }) {
                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Şarkı ekle")
+                    }
+                    if (playlist.kaynak != null) {
+                        NOutlinedButton(onClick = onEsitlemeKapat) { Text("Eşitlemeyi kapat") }
                     }
                     NOutlinedButton(onClick = { pickCover() }) {
                         Icon(Icons.Default.Image, null); Spacer(Modifier.width(4.dp)); Text("Kapak")

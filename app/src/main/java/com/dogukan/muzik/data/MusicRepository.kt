@@ -38,12 +38,25 @@ data class Track(
     val addedAt: Long,
     val cover: String? = null, // covers/ klasöründeki dosya adı
     val videoId: String? = null, // YouTube video kimliği (akış ve indirme için)
+    val album: String? = null,
+    val kazancDb: Float? = null, // ses dengeleme: bu şarkıya uygulanacak kazanç (dB)
 ) {
     /** Telefona indirilmiş mi? İndirilmemiş şarkılar internetten akış olarak çalınır. */
     val indirildi: Boolean get() = fileName.isNotBlank()
 }
 
-data class Playlist(val id: String, val name: String, val trackIds: List<String>, val cover: String? = null)
+/** kaynak: Spotify / YouTube liste linki -> liste oradan kendiliğinden eşitlenir. */
+data class Playlist(val id: String, val name: String, val trackIds: List<String>, val cover: String? = null, val kaynak: String? = null)
+
+/** Akıllı karıştırmanın önerdiği (kütüphanede olmayan) şarkı. */
+data class Oneri(val videoId: String, val title: String, val artist: String)
+
+/** Eski şarkı adı düzeltmesi önizlemesi. */
+data class AdDuzeltme(val track: Track, val yeniAd: String, val yeniSanatci: String)
+
+/** "A, B feat. C" -> "A" (sanatçı sayfaları için ana sanatçı). */
+fun anaSanatci(a: String): String =
+    a.split(Regex("\\s*(,|&|;| feat\\.? | ft\\.? | x | vs\\.? )\\s*", RegexOption.IGNORE_CASE)).first().trim()
 
 /** Kütüphane ve listelerde sıralama seçenekleri. LISTE = listenin kendi (elle düzenlenen) sırası. */
 enum class Siralama(val ad: String) {
@@ -581,7 +594,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 addOption("--no-playlist")
                 addOption("--no-mtime")
                 addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
-                addOption("--print", "after_move:%(title)s\t%(uploader)s\t%(thumbnail)s\t%(id)s")
+                addOption("--print", "after_move:%(title)s\t%(uploader)s\t%(thumbnail)s\t%(id)s\t%(album)s")
                 addOption("--no-simulate")
             }
             val resp = YoutubeDL.getInstance().execute(req, taskId) { p, _, _ ->
@@ -597,6 +610,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             val ytUploader = part(1)?.removeSuffix(" - Topic")
             val ytThumb = part(2)
             val ytVid = part(3)?.takeIf { it.length == 11 }
+            val ytAlbum = part(4)
 
             // Başlık/sanatçı verilmediyse YouTube başlığını temizle: "Sanatçı - Şarkı (Official Video)" -> ayrı ayrı
             var cleanTitle = ytTitle?.let(::temizBaslik)
@@ -619,8 +633,8 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val cur = _tracks.value.find { it.id == existingId }
                 val cov = cur?.cover ?: saveCover(existingId, coverUrl) ?: saveCover(existingId, ytThumb)
                 return updateTrack(existingId) { t ->
-                    t.copy(fileName = target.name, videoId = t.videoId ?: ytVid, cover = t.cover ?: cov)
-                } ?: throw IOException("Şarkı kütüphanede bulunamadı")
+                    t.copy(fileName = target.name, videoId = t.videoId ?: ytVid, cover = t.cover ?: cov, album = t.album ?: ytAlbum)
+                }?.also { sesOlcumuBaslat() } ?: throw IOException("Şarkı kütüphanede bulunamadı")
             }
             val newId = UUID.randomUUID().toString()
             val track = Track(
@@ -632,8 +646,10 @@ class MusicRepository private constructor(private val ctx: Context) {
                 addedAt = System.currentTimeMillis(),
                 cover = saveCover(newId, coverUrl) ?: saveCover(newId, ytThumb),
                 videoId = ytVid,
+                album = ytAlbum,
             )
             addTrack(track)
+            sesOlcumuBaslat()
             return track
         } finally {
             tmp.deleteRecursively()
@@ -727,6 +743,10 @@ class MusicRepository private constructor(private val ctx: Context) {
 
     /** Sıradaki şarkının adresini önceden bul (geçişte bekleme olmasın). */
     fun prefetchStream(trackId: String) {
+        if (trackId.startsWith("oneri:")) {
+            scope.launch { runCatching { streamUrlVideo(trackId.removePrefix("oneri:")) } }
+            return
+        }
         val t = _tracks.value.find { it.id == trackId } ?: return
         if (t.indirildi && fileOf(t).exists()) return
         scope.launch { runCatching { streamUrl(trackId) } }
@@ -748,8 +768,8 @@ class MusicRepository private constructor(private val ctx: Context) {
     private fun temizKanal(s: String): String =
         s.removeSuffix(" - Topic").replace(Regex("(?i)\\s*vevo$"), "").replace(Regex("(?i)\\s*official$"), "").trim()
 
-    private fun expandYtPlaylist(url: String, indir: Boolean = true) {
-        val id = newTask(url, "YouTube listesi okunuyor…")
+    private fun expandYtPlaylist(url: String, indir: Boolean = true, sessiz: Boolean = false, hedef: String? = null) {
+        val id = newTask(url, if (sessiz) "Liste eşitleniyor…" else "YouTube listesi okunuyor…")
         scope.launch {
             try {
                 ensureYt()
@@ -758,7 +778,9 @@ class MusicRepository private constructor(private val ctx: Context) {
                 val root = JSONObject(out.substring(out.indexOf('{')))
                 val entries = root.optJSONArray("entries") ?: JSONArray()
                 if (entries.length() == 0) throw IOException("Listede şarkı bulunamadı")
-                val plId = playlistByName(root.optString("title").ifBlank { "YouTube listesi" })
+                val plId = hedef?.takeIf { h -> _playlists.value.any { it.id == h } }
+                    ?: playlistByName(root.optString("title").ifBlank { "YouTube listesi" })
+                setKaynak(plId, url)
                 for (i in 0 until entries.length()) {
                     val e = entries.optJSONObject(i) ?: continue
                     val vid = e.optString("id")
@@ -769,7 +791,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
             } catch (e: Exception) {
-                fail(id, e) { expandYtPlaylist(url, indir) }
+                if (sessiz) removeTask(id) else fail(id, e) { expandYtPlaylist(url, indir) }
             }
         }
     }
@@ -903,6 +925,203 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
+    // ---------------- Liste eşitleme ----------------
+
+    private fun setKaynak(plId: String, url: String) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { if (it.id == plId && it.kaynak == null) it.copy(kaynak = url) else it }
+        savePlaylists()
+    }
+
+    fun eslitlemeyiKapat(plId: String) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { if (it.id == plId) it.copy(kaynak = null) else it }
+        savePlaylists()
+    }
+
+    /** Kaynağı olan listeleri (Spotify / YouTube) yeniden okur, yeni şarkıları ekler. */
+    fun listeyiEsitle(p: Playlist, sessiz: Boolean) {
+        val url = p.kaynak ?: return
+        if (isSpotify(url)) expandSpotify(url, indirVarsayilan, sessiz, hedef = p.id)
+        else expandYtPlaylist(url, indirVarsayilan, sessiz, hedef = p.id)
+    }
+
+    /** Uygulama açılınca: son eşitlemeden 3 saat geçtiyse tüm bağlı listeleri sessizce eşitle. */
+    fun esitleGerekirse() {
+        val son = prefs.getLong("son_esitleme", 0L)
+        if (System.currentTimeMillis() - son < 3 * 3600_000L) return
+        prefs.edit().putLong("son_esitleme", System.currentTimeMillis()).apply()
+        _playlists.value.filter { it.kaynak != null }.forEach { listeyiEsitle(it, sessiz = true) }
+    }
+
+    // ---------------- Akıllı karıştırma önerileri ----------------
+
+    private fun aramaIdBul(q: String): String? {
+        val req = YoutubeDLRequest("ytsearch1:$q").apply { addOption("--flat-playlist"); addOption("--print", "%(id)s") }
+        return YoutubeDL.getInstance().execute(req).out.lines().map { it.trim() }.firstOrNull { it.length == 11 }
+    }
+
+    /** Verilen şarkılara benzeyen, kütüphanede olmayan şarkılar (YouTube'un "Mix" listelerinden). */
+    suspend fun oneriler(seeds: List<Track>, adet: Int): List<Oneri> = withContext(Dispatchers.IO) {
+        ensureYt()
+        val have = _tracks.value.flatMap { listOfNotNull(it.videoId, ytId(it.sourceUrl)) }.toMutableSet()
+        val out = LinkedHashMap<String, Oneri>()
+        for (t in seeds.shuffled().take(4)) {
+            val vid = t.videoId ?: ytId(t.sourceUrl)
+                ?: runCatching { aramaIdBul("${t.artist} ${t.title}".trim()) }.getOrNull() ?: continue
+            val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$vid&list=RD$vid").apply {
+                addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "25")
+            }
+            val json = runCatching {
+                val o = YoutubeDL.getInstance().execute(req).out
+                JSONObject(o.substring(o.indexOf('{')))
+            }.getOrNull() ?: continue
+            val entries = json.optJSONArray("entries") ?: continue
+            for (i in 0 until entries.length()) {
+                val e = entries.optJSONObject(i) ?: continue
+                val id = e.optString("id")
+                if (id.length != 11 || id == vid || id in have || out.containsKey(id)) continue
+                val (ad, sanatci) = ytAdSanatci(e.optString("title"), e.optString("channel").ifBlank { e.optString("uploader") })
+                if (ad.isBlank()) continue
+                out[id] = Oneri(id, ad, sanatci)
+            }
+            if (out.size >= adet * 2) break
+        }
+        out.values.shuffled().take(adet)
+    }
+
+    /** Önerilen şarkıyı kütüphaneye (indirmeden) ekler; şarkı kimliğini döndürür. */
+    fun oneriyiEkle(o: Oneri): String {
+        findExisting("https://www.youtube.com/watch?v=${o.videoId}", o.title, o.artist)?.let { return it.id }
+        val newId = UUID.randomUUID().toString()
+        addTrack(Track(newId, o.title, o.artist, "", "https://www.youtube.com/watch?v=${o.videoId}",
+            System.currentTimeMillis(), null, o.videoId))
+        scope.launch { saveCover(newId, "https://i.ytimg.com/vi/${o.videoId}/hqdefault.jpg")?.let { c -> updateTrack(newId) { it.copy(cover = c) } } }
+        return newId
+    }
+
+    // ---------------- Eski şarkı adlarını düzeltme ----------------
+
+    /** YouTube'dan gelmiş şarkılarda "(Official Video)", "VEVO" gibi ekleri ve "Sanatçı - Şarkı" adlarını düzeltme önerileri. */
+    fun adDuzeltmeleri(): List<AdDuzeltme> = _tracks.value.mapNotNull { t ->
+        val youtubeKaynakli = isYouTube(t.sourceUrl)
+        if (!youtubeKaynakli) return@mapNotNull null
+        var ad = temizBaslik(t.title).ifBlank { t.title }
+        var sanatci = temizKanal(t.artist)
+        val sep = listOf(" - ", " – ", " — ").firstOrNull { ad.contains(it) }
+        if (sep != null) {
+            val l = ad.substringBefore(sep).trim(); val r = ad.substringAfter(sep).trim()
+            // "Şarkı - Remastered 2011" gibi ekler sanatçı-şarkı ayrımı değildir
+            val surumEki = Regex("^(\\d{4}\\b|(remaster(ed)?|live|radio edit|single version|album version|mono|stereo|demo|acoustic|instrumental|bonus track|remix|edit)\\b)", RegexOption.IGNORE_CASE)
+            // Sadece sanatçı alanı bir kanal adı gibiyse ya da soldaki adla eşleşiyorsa böl (temkinli)
+            val kanalGibi = t.artist.isBlank() || Regex("(?i)(vevo|- topic|official|records|music)$").containsMatchIn(t.artist.trim()) ||
+                norm(l) == norm(sanatci) || (norm(sanatci).length >= 3 && (norm(l).contains(norm(sanatci)) || norm(sanatci).contains(norm(l))))
+            if (l.isNotEmpty() && r.isNotEmpty() && !surumEki.containsMatchIn(r) && kanalGibi) { sanatci = l; ad = r }
+        }
+        if (ad == t.title && sanatci == t.artist) null else AdDuzeltme(t, ad, sanatci)
+    }
+
+    fun adlariDuzelt(list: List<AdDuzeltme>) = synchronized(lock) {
+        val m = list.associateBy { it.track.id }
+        _tracks.value = _tracks.value.map { t -> m[t.id]?.let { t.copy(title = it.yeniAd, artist = it.yeniSanatci) } ?: t }
+        saveTracks()
+    }
+
+    // ---------------- Ses dengeleme (ses seviyesi ölçümü) ----------------
+
+    private var olcumIsi: kotlinx.coroutines.Job? = null
+
+    /** İndirilmiş ama sesi ölçülmemiş şarkıları arka planda tek tek ölçer. */
+    fun sesOlcumuBaslat() {
+        // Sadece "Ses dengeleme" açıksa ölç (gereksiz pil harcamasın)
+        if (!ctx.getSharedPreferences("oynatici", Context.MODE_PRIVATE).getBoolean("normalize", false)) return
+        if (olcumIsi?.isActive == true) return
+        olcumIsi = scope.launch(Dispatchers.Default) {
+            while (true) {
+                val t = _tracks.value.firstOrNull { it.indirildi && it.kazancDb == null && fileOf(it).exists() } ?: break
+                val g = sesOlc(fileOf(t)) ?: 0f
+                updateTrack(t.id) { it.copy(kazancDb = g) }
+            }
+        }
+    }
+
+    /** Dosyayı çözüp ortalama ses seviyesini (RMS) ölçer, hedef seviyeye göre kazancı (dB) verir. */
+    private fun sesOlc(f: File): Float? = runCatching {
+        val ex = android.media.MediaExtractor()
+        ex.setDataSource(f.absolutePath)
+        val ti = (0 until ex.trackCount).firstOrNull {
+            ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+        } ?: run { ex.release(); return null }
+        ex.selectTrack(ti)
+        val fmt = ex.getTrackFormat(ti)
+        val codec = android.media.MediaCodec.createDecoderByType(fmt.getString(android.media.MediaFormat.KEY_MIME)!!)
+        codec.configure(fmt, null, null, 0)
+        codec.start()
+        val info = android.media.MediaCodec.BufferInfo()
+        var inputDone = false
+        var outputDone = false
+        var sumSq = 0.0
+        var n = 0L
+        val deadline = System.currentTimeMillis() + 90_000
+        try {
+            while (!outputDone && System.currentTimeMillis() < deadline) {
+                if (!inputDone) {
+                    val ii = codec.dequeueInputBuffer(10_000)
+                    if (ii >= 0) {
+                        val buf = codec.getInputBuffer(ii)!!
+                        val size = ex.readSampleData(buf, 0)
+                        if (size < 0) {
+                            codec.queueInputBuffer(ii, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputDone = true
+                        } else {
+                            codec.queueInputBuffer(ii, 0, size, ex.sampleTime, 0)
+                            ex.advance()
+                        }
+                    }
+                }
+                val oi = codec.dequeueOutputBuffer(info, 10_000)
+                if (oi >= 0) {
+                    val ob = codec.getOutputBuffer(oi)
+                    if (ob != null && info.size > 0) {
+                        ob.position(info.offset); ob.limit(info.offset + info.size)
+                        val sb = ob.order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                        var k = 0
+                        while (k < sb.remaining()) {
+                            val v = sb.get(k) / 32768.0
+                            sumSq += v * v; n++
+                            k += 4 // her 4 örnekten birini say (yeterince doğru, daha hızlı)
+                        }
+                    }
+                    codec.releaseOutputBuffer(oi, false)
+                    if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                }
+            }
+        } finally {
+            runCatching { codec.stop() }; runCatching { codec.release() }; runCatching { ex.release() }
+        }
+        if (n == 0L || sumSq <= 0.0) return null
+        val db = 20 * kotlin.math.log10(kotlin.math.sqrt(sumSq / n))
+        (HEDEF_RMS_DB - db).toFloat().coerceIn(-12f, 6f)
+    }.getOrNull()
+
+    private val HEDEF_RMS_DB = -18.0
+
+    fun kazancOf(trackId: String): Float? = _tracks.value.find { it.id == trackId }?.kazancDb
+
+    // ---------------- Önerilen şarkı akışı ----------------
+
+    /** Kütüphanede olmayan (öneri) şarkının internet adresi. */
+    fun streamUrlVideo(videoId: String): String {
+        val key = "yt:$videoId"
+        streamCache[key]?.let { if (it.second > System.currentTimeMillis()) return it.first }
+        kotlinx.coroutines.runBlocking { ensureYt() }
+        val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$videoId").apply {
+            addOption("-f", "bestaudio[ext=m4a]/bestaudio"); addOption("--no-playlist"); addOption("--print", "urls")
+        }
+        val url = YoutubeDL.getInstance().execute(req).out.lines().map { it.trim() }.firstOrNull { it.startsWith("http") }
+            ?: throw IOException("Akış adresi bulunamadı")
+        streamCache[key] = url to System.currentTimeMillis() + 4 * 3600_000L
+        return url
+    }
+
     // ---------------- Spotify ----------------
 
     private var loginServer: java.net.ServerSocket? = null
@@ -992,14 +1211,16 @@ class MusicRepository private constructor(private val ctx: Context) {
         }
     }
 
-    private fun expandSpotify(url: String, indir: Boolean = true) {
-        val id = newTask(url, "Spotify okunuyor…")
+    private fun expandSpotify(url: String, indir: Boolean = true, sessiz: Boolean = false, hedef: String? = null) {
+        val id = newTask(url, if (sessiz) "Liste eşitleniyor…" else "Spotify okunuyor…")
         scope.launch {
             try {
                 val (name, items, cover) = resolveSpotify(url)
                 if (items.isEmpty()) throw IOException("Spotify'da şarkı bulunamadı")
                 val plName = name.ifBlank { "Spotify listesi" }
-                val plId = if (items.size > 1) playlistByName(plName) else null
+                val plId = hedef?.takeIf { h -> _playlists.value.any { it.id == h } }
+                    ?: if (items.size > 1) playlistByName(plName) else null
+                if (plId != null && url.contains("/playlist/")) setKaynak(plId, url)
                 var added = 0
                 items.forEachIndexed { i, (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
@@ -1007,7 +1228,9 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
                 removeTask(id)
                 val skipped = items.size - added
-                if (url.contains("/playlist/") && items.size == 100 && !SpotifyApi.bagli.value) {
+                if (sessiz) {
+                    if (added > 0) _notices.tryEmit("\"$plName\" eşitlendi: $added yeni şarkı eklendi.")
+                } else if (url.contains("/playlist/") && items.size == 100 && !SpotifyApi.bagli.value) {
                     _notices.tryEmit(
                         "Spotify girişsiz sadece ilk 100 şarkıyı veriyor.\n\n" +
                             "En kolayı: Ayarlar → Spotify bölümünden giriş yap ve linki tekrar yapıştır, listenin tamamı gelir.\n\n" +
@@ -1022,7 +1245,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                     _notices.tryEmit("$added şarkı indiriliyor. $skipped şarkı zaten kütüphanede olduğu için atlandı.")
                 }
             } catch (e: Exception) {
-                fail(id, e) { expandSpotify(url) }
+                if (sessiz) removeTask(id) else fail(id, e) { expandSpotify(url, indir) }
             }
         }
     }
@@ -1376,7 +1599,9 @@ class MusicRepository private constructor(private val ctx: Context) {
                 // Dosyası telefondan silinmiş şarkılar kütüphanede kalır, "indirilmemiş" olur
                 if (file.isNotBlank() && File(musicDir, file).exists()) file else "",
                 o.optString("sourceUrl"), o.optLong("addedAt"),
-                o.optString("cover").ifBlank { null }, o.optString("videoId").ifBlank { null })
+                o.optString("cover").ifBlank { null }, o.optString("videoId").ifBlank { null },
+                o.optString("album").ifBlank { null },
+                if (o.has("kazanc")) o.optDouble("kazanc").toFloat() else null)
         }
     }.getOrDefault(emptyList())
 
@@ -1385,7 +1610,8 @@ class MusicRepository private constructor(private val ctx: Context) {
         _tracks.value.forEach {
             arr.put(JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist)
                 .put("fileName", it.fileName).put("sourceUrl", it.sourceUrl).put("addedAt", it.addedAt)
-                .put("cover", it.cover ?: "").put("videoId", it.videoId ?: ""))
+                .put("cover", it.cover ?: "").put("videoId", it.videoId ?: "").put("album", it.album ?: "")
+                .apply { it.kazancDb?.let { k -> put("kazanc", k.toDouble()) } })
         }
         libFile.writeText(arr.toString())
     }
@@ -1396,7 +1622,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             val o = arr.getJSONObject(i)
             val ids = o.getJSONArray("trackIds")
             Playlist(o.getString("id"), o.getString("name"), (0 until ids.length()).map { ids.getString(it) },
-                o.optString("cover").ifBlank { null })
+                o.optString("cover").ifBlank { null }, o.optString("kaynak").ifBlank { null })
         }
     }.getOrDefault(emptyList())
 
@@ -1404,7 +1630,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         val arr = JSONArray()
         _playlists.value.forEach { p ->
             arr.put(JSONObject().put("id", p.id).put("name", p.name).put("trackIds", JSONArray(p.trackIds))
-                .put("cover", p.cover ?: ""))
+                .put("cover", p.cover ?: "").put("kaynak", p.kaynak ?: ""))
         }
         plFile.writeText(arr.toString())
     }

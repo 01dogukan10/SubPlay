@@ -94,10 +94,7 @@ fun SmartListScreen(
 private fun SmartPlayControls(shuffle: Boolean, onToggleShuffle: () -> Unit, onPlay: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onToggleShuffle) {
-            Icon(Icons.Default.Shuffle, "Karışık",
-                tint = if (shuffle) c.primary else c.onSurfaceVariant)
-        }
+        IconButton(onClick = onToggleShuffle) { KarisikIkon(shuffle) }
         androidx.compose.material3.FilledIconButton(
             onClick = onPlay,
             modifier = Modifier.size(52.dp).neonCerceve(androidx.compose.foundation.shape.CircleShape),
