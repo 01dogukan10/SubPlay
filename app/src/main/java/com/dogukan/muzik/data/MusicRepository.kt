@@ -6,7 +6,9 @@ import android.os.Environment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -87,6 +89,34 @@ class MusicRepository private constructor(private val ctx: Context) {
     private val _downloads = MutableStateFlow<List<DownloadTask>>(emptyList())
     val downloads = _downloads.asStateFlow()
 
+    /** Kullanıcıya gösterilecek bilgi mesajları (ekranda pencere olarak çıkar). */
+    private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val notices = _notices.asSharedFlow()
+
+    private val trLocale = java.util.Locale("tr")
+
+    /** Karşılaştırma için sadeleştir: küçük harf, parantez içi ve "official/lyrics" gibi ekler atılır. */
+    private fun norm(s: String): String = s.lowercase(trLocale)
+        .replace(Regex("[(\\[].*?[)\\]]"), " ")
+        .replace(Regex("\\b(official|video|audio|lyrics?|lyric video|music video|hd|4k|remastered|klip|sözleri)\\b"), " ")
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .trim()
+
+    private fun ytId(u: String): String? =
+        Regex("(?:v=|youtu\\.be/|shorts/)([A-Za-z0-9_-]{11})").find(u)?.groupValues?.get(1)
+
+    /** Bu kaynak / şarkı daha önce indirildiyse onu döndürür. */
+    private fun findExisting(source: String, title: String?, artist: String?): Track? {
+        val list = _tracks.value
+        list.find { it.sourceUrl == source }?.let { return it }
+        ytId(source)?.let { id -> list.find { ytId(it.sourceUrl) == id }?.let { return it } }
+        val t = title?.let(::norm)?.takeIf { it.isNotEmpty() } ?: return null
+        val a = artist?.let(::norm).orEmpty()
+        return list.find { tr ->
+            norm(tr.title) == t && (a.isEmpty() || norm(tr.artist).let { it == a || it.contains(a) || a.contains(it) && it.isNotEmpty() })
+        }
+    }
+
     /** Hata veren indirmeleri yeniden başlatmak için. */
     private val retries = ConcurrentHashMap<String, () -> Unit>()
 
@@ -155,13 +185,22 @@ class MusicRepository private constructor(private val ctx: Context) {
      * Daha önce aynı aramayla indirilenler atlanır. Eklenen şarkı sayısını döndürür.
      */
     fun bulkImport(text: String, playlistName: String?): BulkResult {
-        val items = parseSongList(text)
-        if (items.isEmpty()) return BulkResult(0, 0)
-        val already = _tracks.value.map { it.sourceUrl }.toSet()
+        val allLines = text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+        val linkRe = Regex("https?://\\S+")
+        val links = allLines.mapNotNull { l -> linkRe.find(l)?.value?.takeIf { l.startsWith("http") } }
+        val spotifyLinks = links.filter { it.contains("spotify.com/track/") || it.contains("spotify.link/") }
+        val ytLinks = links.filter { isYouTube(it) && !isYtPlaylist(it) }
+        val items = parseSongList(allLines.filterNot { l -> l.startsWith("http") }.joinToString("\n"))
+        val total = items.size + spotifyLinks.size + ytLinks.size
+        if (total == 0) return BulkResult(0, 0)
+
         val plId = playlistName?.trim()?.takeIf { it.isNotEmpty() }?.let { name ->
             _playlists.value.find { it.name.equals(name, ignoreCase = true) }?.id ?: createPlaylist(name)
         }
         var count = 0
+        ytLinks.forEach { if (enqueueYt(it, null, null, plId, it)) count++ }
+        if (spotifyLinks.isNotEmpty()) importSpotifyLinks(spotifyLinks, plId)
+        val already = _tracks.value.map { it.sourceUrl }.toSet()
         for ((artist, title) in items) {
             val label = if (artist.isBlank()) title else "$artist - $title"
             val query = "ytsearch1:$label audio"
@@ -172,7 +211,37 @@ class MusicRepository private constructor(private val ctx: Context) {
             }
             if (enqueueYt(query, title.takeIf { artist.isNotBlank() }, artist.ifBlank { null }, plId, label)) count++
         }
-        return BulkResult(items.size, count)
+        // Spotify linkleri arka planda tek tek okunur; sayıları sonra ayrıca bildirilir
+        return BulkResult(total, count + spotifyLinks.size)
+    }
+
+    /** Kopyalanan Spotify şarkı linklerini sırayla okuyup indirme kuyruğuna ekler. */
+    private fun importSpotifyLinks(links: List<String>, plId: String?) {
+        val id = newTask(links.first(), "Spotify linkleri okunuyor (0/${links.size})")
+        scope.launch {
+            var added = 0; var skipped = 0; var failed = 0
+            links.forEachIndexed { i, link ->
+                updateTask(id) { it.copy(name = "Spotify linkleri okunuyor (${i + 1}/${links.size})", progress = (i + 1f) / links.size) }
+                try {
+                    val (_, items, cover) = resolveSpotify(link)
+                    items.forEach { (title, artist) ->
+                        val label = if (artist.isBlank()) title else "$artist - $title"
+                        if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)) added++ else skipped++
+                    }
+                } catch (e: Exception) {
+                    failed++
+                }
+                kotlinx.coroutines.delay(150) // Spotify'ı yormamak için
+            }
+            removeTask(id)
+            _notices.tryEmit(
+                buildString {
+                    append("$added şarkı indiriliyor.")
+                    if (skipped > 0) append(" $skipped şarkı zaten vardı, atlandı.")
+                    if (failed > 0) append(" $failed link okunamadı.")
+                }
+            )
+        }
     }
 
     private fun parseSongList(text: String): List<Pair<String, String>> {
@@ -323,6 +392,11 @@ class MusicRepository private constructor(private val ctx: Context) {
         source: String, title: String?, artist: String?, playlistId: String?, label: String,
         coverUrl: String? = null,
     ): Boolean {
+        // Zaten indirilmişse tekrar indirme; sadece listeye ekle
+        findExisting(source, title, artist)?.let { t ->
+            if (playlistId != null) addToPlaylist(playlistId, t.id)
+            return false
+        }
         // Aynı şarkı zaten iniyorsa ikinci kez indirme; sadece listesini not et
         val inFlight = synchronized(lock) { _downloads.value.any { it.url == source && it.error == null } }
         if (inFlight) {
@@ -422,12 +496,30 @@ class MusicRepository private constructor(private val ctx: Context) {
             try {
                 val (name, items, cover) = resolveSpotify(url)
                 if (items.isEmpty()) throw IOException("Spotify'da şarkı bulunamadı")
-                val plId = if (items.size > 1) createPlaylist(name.ifBlank { "Spotify listesi" }) else null
+                val plName = name.ifBlank { "Spotify listesi" }
+                val plId = if (items.size > 1) {
+                    _playlists.value.find { it.name == plName }?.id ?: createPlaylist(plName)
+                } else null
+                var added = 0
                 items.forEach { (title, artist) ->
                     val label = if (artist.isBlank()) title else "$artist - $title"
-                    enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)
+                    if (enqueueYt("ytsearch1:$label audio", title, artist, plId, label, cover)) added++
                 }
                 removeTask(id)
+                val skipped = items.size - added
+                if (url.contains("/playlist/") && items.size >= 100) {
+                    _notices.tryEmit(
+                        "Spotify bu yolla sadece ilk 100 şarkıyı veriyor.\n\n" +
+                            "Listenin tamamı için iki yol var:\n\n" +
+                            "1) Telefon tarayıcısında exportify.net'e gir, Spotify ile giriş yap, listeyi CSV olarak indir. " +
+                            "Sonra burada + → Toplu ekle → Dosyadan aç ile o CSV'yi seç.\n\n" +
+                            "2) Bilgisayardaki Spotify uygulamasında listeyi aç, Ctrl+A ile tüm şarkıları seç, Ctrl+C ile kopyala. " +
+                            "Kopyalanan şarkı linklerini Toplu ekle kutusuna yapıştır.\n\n" +
+                            "Daha önce inen şarkılar tekrar inmez."
+                    )
+                } else if (skipped > 0) {
+                    _notices.tryEmit("$added şarkı indiriliyor. $skipped şarkı zaten kütüphanede olduğu için atlandı.")
+                }
             } catch (e: Exception) {
                 fail(id, e) { expandSpotify(url) }
             }

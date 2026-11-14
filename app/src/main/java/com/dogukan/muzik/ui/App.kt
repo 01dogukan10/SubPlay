@@ -118,6 +118,8 @@ fun App(
     var addInitial by remember { mutableStateOf("") }
     var showToken by remember { mutableStateOf(false) }
     var showBulk by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { vm.repo.notices.collect { notice = it } }
     var bulkInitial by remember { mutableStateOf("") }
     var pickPlaylistFor by remember { mutableStateOf<Track?>(null) }
     var confirmDelete by remember { mutableStateOf<Track?>(null) }
@@ -261,8 +263,8 @@ fun App(
                     when {
                         r.found == 0 -> "Listede şarkı bulunamadı"
                         r.added == 0 -> "Yeni şarkı yok: ${r.found} şarkının hepsi zaten kütüphanede ya da iniyor"
-                        r.added < r.found -> "${r.added} şarkı indiriliyor (${r.found - r.added} tanesi zaten vardı)"
-                        else -> "${r.added} şarkı aranıp indiriliyor"
+                        r.added < r.found -> "${r.added} şarkı işleniyor (${r.found - r.added} tanesi zaten vardı, atlandı)"
+                        else -> "${r.added} şarkı işleniyor"
                     }
                 )
             },
@@ -317,6 +319,15 @@ fun App(
             dismissButton = {
                 TextButton(enabled = !update.downloading, onClick = vm::dismissUpdate) { Text("Sonra") }
             },
+        )
+    }
+
+    notice?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { notice = null },
+            title = { Text("Bilgi") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { notice = null }) { Text("Tamam") } },
         )
     }
 
@@ -740,7 +751,7 @@ private fun BulkDialog(
         title = { Text("Toplu ekle") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Her satıra bir şarkı yaz. \"Sanatçı - Şarkı\" şeklinde yazarsan daha doğru bulunur.",
+                Text("Her satıra bir şarkı yaz (\"Sanatçı - Şarkı\" en iyisi) ya da Spotify / YouTube şarkı linklerini yapıştır.",
                     style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     text, { text = it },

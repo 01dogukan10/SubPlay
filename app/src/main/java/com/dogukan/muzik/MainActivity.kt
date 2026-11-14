@@ -64,8 +64,8 @@ class MainActivity : ComponentActivity() {
         val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
         val url = Regex("https?://\\S+").find(text)?.value
         when {
+            text.lines().count { it.isNotBlank() } >= 2 -> sharedList.value = text // birden çok şarkı / link
             url != null -> sharedUrl.value = url
-            text.lines().count { it.isNotBlank() } >= 2 -> sharedList.value = text // not uygulamasından liste
         }
     }
 }
