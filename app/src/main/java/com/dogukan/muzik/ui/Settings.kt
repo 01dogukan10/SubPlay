@@ -79,6 +79,10 @@ fun SettingsScreen(
     onSpotifyLogin: () -> Unit,
     onSpotifyLogout: () -> Unit,
     onImportLiked: () -> Unit,
+    gecisSn: Int,
+    onGecis: (Int) -> Unit,
+    sadeceWifi: Boolean,
+    onSadeceWifi: (Boolean) -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
@@ -180,6 +184,35 @@ fun SettingsScreen(
                     headlineContent = { Text("Spotify çıkış yap") },
                 )
             }
+        }
+
+        Section("Oynatma ve indirme") {
+            var gecis by remember { mutableStateOf(gecisSn.toFloat()) }
+            ListItem(
+                colors = transparentRow(),
+                headlineContent = { Text("Yumuşak geçiş") },
+                supportingContent = {
+                    Column {
+                        Text(
+                            if (gecis.toInt() == 0) "Kapalı: şarkılar boşluksuz arka arkaya çalar"
+                            else "Şarkı sonunda ses ${gecis.toInt()} saniyede kısılır, yenisi aynı sürede açılır",
+                        )
+                        androidx.compose.material3.Slider(
+                            value = gecis, onValueChange = { gecis = it },
+                            onValueChangeFinished = { onGecis(gecis.toInt()) },
+                            valueRange = 0f..12f, steps = 11,
+                        )
+                    }
+                },
+            )
+            var wifi by remember { mutableStateOf(sadeceWifi) }
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { wifi = !wifi; onSadeceWifi(wifi) },
+                headlineContent = { Text("Sadece Wi-Fi'de indir") },
+                supportingContent = { Text("Mobil verideyken indirmeler bekler, Wi-Fi gelince devam eder") },
+                trailingContent = { Switch(checked = wifi, onCheckedChange = { wifi = it; onSadeceWifi(it) }) },
+            )
         }
 
         Section("Yedek / taşıma") {

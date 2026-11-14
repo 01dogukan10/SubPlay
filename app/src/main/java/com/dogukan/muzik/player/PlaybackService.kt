@@ -25,6 +25,7 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
 import com.dogukan.muzik.MainActivity
 import com.dogukan.muzik.data.MusicRepository
+import com.dogukan.muzik.data.Istatistik
 import com.dogukan.muzik.data.Track
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -37,7 +38,8 @@ object SiraKomut {
     const val TASI = "sira.tasi"           // from: Int, to: Int
     const val TEMIZLE = "sira.temizle"
     const val YENI_KUYRUK = "sira.yeni"    // yeni liste çalındı -> (karışıksa) karıştır
-    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK)
+    const val UYKU = "uyku"                // dk: Int (>0 dakika, -1 şarkı bitince, 0 kapat)
+    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU)
 }
 
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
@@ -78,6 +80,62 @@ class PlaybackService : MediaSessionService() {
     private var oncekiUid: String? = null
     private var oncekiKuyrukta = false
     private var artArdaHata = 0
+
+    // Uyku zamanlayıcısı
+    private var uykuBitis = 0L
+    private var uykuSarkiSonu = false
+
+    // Dinleme kaydı (istatistik ve akıllı listeler için)
+    private var dinlenenId: String? = null
+    private var dinlemeBas = 0L
+    private var dinlenenMs = 0L
+
+    private val TICK = 250L
+    private val tick = object : Runnable {
+        override fun run() {
+            if (::player.isInitialized) adim()
+            main.postDelayed(this, TICK)
+        }
+    }
+
+    /** Her 250 ms: ses (yumuşak geçiş + uyku kısması), uyku süresi, dinleme süresi. */
+    private fun adim() {
+        val prefs = getSharedPreferences("oynatici", MODE_PRIVATE)
+        if (player.isPlaying) dinlenenMs += TICK
+        var v = 1f
+        val fade = prefs.getInt("gecis_sn", 0) * 1000L
+        val dur = player.duration
+        val pos = player.currentPosition
+        if (fade > 0 && dur > 0 && dur > 3 * fade) {
+            if (pos < fade) v = minOf(v, pos.toFloat() / fade)
+            val kalan = dur - pos
+            val devami = player.hasNextMediaItem() || player.repeatMode != Player.REPEAT_MODE_OFF
+            if (kalan < fade && devami) v = minOf(v, kalan.toFloat() / fade)
+        }
+        if (uykuBitis > 0) {
+            val kalan = uykuBitis - System.currentTimeMillis()
+            if (kalan <= 0) {
+                player.pause(); uykuBitis = 0
+            } else if (kalan < 10_000) v = minOf(v, kalan / 10_000f) // son 10 saniyede sesi yavaşça kıs
+        }
+        v = v.coerceIn(0f, 1f)
+        if (kotlin.math.abs(player.volume - v) > 0.01f) player.volume = v
+    }
+
+    private fun dinlemeyiKaydet() {
+        val id = dinlenenId ?: return
+        Istatistik.get(this).kaydet(id, dinlemeBas, dinlenenMs)
+        dinlenenId = null; dinlenenMs = 0
+    }
+
+    private fun uyku(dk: Int) {
+        uykuBitis = 0
+        if (uykuSarkiSonu) { player.pauseAtEndOfMediaItems = false; uykuSarkiSonu = false }
+        when {
+            dk > 0 -> uykuBitis = System.currentTimeMillis() + dk * 60_000L
+            dk == -1 -> { player.pauseAtEndOfMediaItems = true; uykuSarkiSonu = true }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -136,7 +194,19 @@ class PlaybackService : MediaSessionService() {
                 if (isPlaying) artArdaHata = 0
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // "Şarkı bitince" uyku: şarkının sonunda durduysa ayarı sıfırla
+                if (!playWhenReady && uykuSarkiSonu && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) {
+                    player.pauseAtEndOfMediaItems = false
+                    uykuSarkiSonu = false
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Önceki şarkının dinlenme süresini kaydet, yenisini saymaya başla
+                dinlemeyiKaydet()
+                dinlenenId = mediaItem?.mediaId
+                dinlemeBas = System.currentTimeMillis()
                 // Sıradaki şarkının internet adresini önceden bul
                 main.post {
                     val n = player.nextMediaItemIndex
@@ -157,6 +227,8 @@ class PlaybackService : MediaSessionService() {
                 }
             }
         })
+
+        main.post(tick)
 
         val openApp = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -196,6 +268,7 @@ class PlaybackService : MediaSessionService() {
                         SiraKomut.TASI -> tasi(args.getInt("from"), args.getInt("to"))
                         SiraKomut.TEMIZLE -> sirayiAl().sortedDescending().forEach { player.removeMediaItem(it) }
                         SiraKomut.YENI_KUYRUK -> if (player.shuffleModeEnabled) karistir()
+                        SiraKomut.UYKU -> uyku(args.getInt("dk"))
                     }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
@@ -307,6 +380,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        main.removeCallbacks(tick)
+        dinlemeyiKaydet()
         session?.run { player.release(); release() }
         session = null
         super.onDestroy()

@@ -46,6 +46,10 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.PhonelinkErase
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
@@ -142,6 +146,14 @@ fun App(
     var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
+    var showLyrics by rememberSaveable { mutableStateOf(false) }
+    var openSmart by rememberSaveable { mutableStateOf<String?>(null) }
+    val uyku by vm.uyku.collectAsStateWithLifecycle()
+    val istatistikSurum by com.dogukan.muzik.data.Istatistik.get(ctx).surum.collectAsStateWithLifecycle()
+    val begeniler = remember(playlists) {
+        playlists.find { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }?.trackIds?.toSet() ?: emptySet()
+    }
+    val begen: (Track) -> Unit = { t -> toast(if (vm.repo.toggleLike(t.id)) "Beğendiklerim'e eklendi" else "Beğendiklerim'den çıkarıldı") }
     val sira by vm.sira.collectAsStateWithLifecycle()
     var libSort by remember { mutableStateOf(vm.repo.siralama("kutuphane", Siralama.YENI)) }
 
@@ -182,6 +194,8 @@ fun App(
     BackHandler(enabled = showPlayer && !showQueue) { showPlayer = false }
     BackHandler(enabled = showQueue) { showQueue = false }
     BackHandler(enabled = !showPlayer && tab == 1 && openPlaylistId != null) { openPlaylistId = null }
+    BackHandler(enabled = !showPlayer && tab == 1 && openSmart != null) { openSmart = null }
+    BackHandler(enabled = showLyrics) { showLyrics = false }
 
     val trackMenu: @Composable (Track, () -> Unit) -> Unit = { t, close ->
         DropdownMenuItem(text = { Text("Sıradaki olarak çal") }, onClick = {
@@ -190,6 +204,7 @@ fun App(
         DropdownMenuItem(text = { Text("Sıraya ekle") }, onClick = {
             close(); vm.queueTracks(listOf(t), basa = false); toast("Sıraya eklendi")
         })
+        DropdownMenuItem(text = { Text(if (t.id in begeniler) "Beğenmekten vazgeç" else "Beğen") }, onClick = { close(); begen(t) })
         DropdownMenuItem(text = { Text("Listeye ekle") }, onClick = { close(); pickPlaylistFor = listOf(t) })
         DropdownMenuItem(text = { Text("Adını düzenle") }, onClick = { close(); editTrack = t })
         DropdownMenuItem(text = { Text("Paylaş") }, onClick = { close(); Paylas.dosyalar(ctx, t.title, listOf(vm.repo.fileOf(t))) })
@@ -290,8 +305,22 @@ fun App(
                         sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
                         onSira = { vm.repo.setSiralama("liste_${openPl.id}", it) },
                     )
+                    tab == 1 && openSmart == "istatistik" -> StatsScreen(tracks, coverOf, istatistikSurum) { openSmart = null }
+                    tab == 1 && openSmart != null -> {
+                        val ist = com.dogukan.muzik.data.Istatistik.get(ctx)
+                        val (baslik, aciklama, liste) = remember(openSmart, tracks, istatistikSurum) {
+                            when (openSmart) {
+                                "encok" -> Triple("En çok dinlediklerim", "En sık dinlediğin 50 şarkı", ist.enCokDinlenen(tracks))
+                                "son" -> Triple("Son eklenenler", "Kütüphanene en son eklenen 50 şarkı", ist.sonEklenen(tracks))
+                                else -> Triple("Uzun süredir dinlemediklerin", "Uzun zamandır (ya da hiç) çalmadığın şarkılar", ist.unutulan(tracks))
+                            }
+                        }
+                        SmartListScreen(baslik, aciklama, liste, coverOf, player.currentId, player.shuffle, vm::toggleShuffle,
+                            onPlay = { l, i, s -> vm.playTracks(l, i, s) }, onBack = { openSmart = null }, menu = trackMenu)
+                    }
                     tab == 1 -> PlaylistsScreen(
                         playlists, tracks, coverOf, vm.repo::playlistCover,
+                        onOpenSmart = { openSmart = it },
                         onOpen = { openPlaylistId = it.id },
                         onCreate = { vm.repo.createPlaylist(it) },
                         onDelete = { vm.repo.deletePlaylist(it.id) },
@@ -312,6 +341,10 @@ fun App(
                         },
                         onSpotifyLogout = { com.dogukan.muzik.data.SpotifyApi.logout(ctx) },
                         onImportLiked = { vm.repo.importLikedSongs(vm.repo.indirVarsayilan); tab = 0 },
+                        gecisSn = vm.gecisSn,
+                        onGecis = { vm.gecisSn = it },
+                        sadeceWifi = vm.repo.sadeceWifi,
+                        onSadeceWifi = { vm.repo.sadeceWifi = it },
                     )
                 }
             }
@@ -322,7 +355,19 @@ fun App(
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
         ) {
-            FullPlayer(player, vm, onClose = { showPlayer = false }, onOpenQueue = { showQueue = true })
+            FullPlayer(
+                player, vm, onClose = { showPlayer = false }, onOpenQueue = { showQueue = true },
+                ekstra = OynaticiEkstra(
+                    liked = player.currentId in begeniler,
+                    onLike = { player.currentId?.let { id -> tracks.find { it.id == id }?.let(begen) } },
+                    onLyrics = { showLyrics = true },
+                    uyku = uyku,
+                    onSleep = { dk ->
+                        vm.setSleep(dk)
+                        toast(when { dk > 0 -> "$dk dakika sonra duracak"; dk == -1 -> "Bu şarkı bitince duracak"; else -> "Uyku zamanlayıcısı kapatıldı" })
+                    },
+                ),
+            )
         }
 
         AnimatedVisibility(
@@ -331,6 +376,14 @@ fun App(
             exit = slideOutVertically { it } + fadeOut(),
         ) {
             QueueScreen(sira, player, vm, onClose = { showQueue = false })
+        }
+
+        AnimatedVisibility(
+            visible = showLyrics && player.title != null,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+        ) {
+            LyricsScreen(player, vm, onClose = { showLyrics = false })
         }
       }
     }
@@ -836,6 +889,7 @@ private fun PlaylistsScreen(
     library: List<Track>,
     coverOf: (Track) -> File?,
     playlistCoverOf: (Playlist) -> File?,
+    onOpenSmart: (String) -> Unit,
     onOpen: (Playlist) -> Unit,
     onCreate: (String) -> Unit,
     onDelete: (Playlist) -> Unit,
@@ -850,9 +904,39 @@ private fun PlaylistsScreen(
                 Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Yeni")
             }
         }
-        if (playlists.isEmpty()) EmptyState("Henüz çalma listesi yok.")
         LazyColumn {
-            items(playlists, key = { it.id }) { p ->
+            item {
+                // Kendiliğinden güncellenen listeler
+                Text("Senin için", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 4.dp))
+                listOf(
+                    Triple("encok", "En çok dinlediklerim", Icons.Default.TrendingUp),
+                    Triple("son", "Son eklenenler", Icons.Default.NewReleases),
+                    Triple("unutulan", "Uzun süredir dinlemediklerin", Icons.Default.History),
+                    Triple("istatistik", "İstatistikler", Icons.Default.BarChart),
+                ).forEach { (key, ad, ikon) ->
+                    ListItem(
+                        colors = transparentRow(),
+                        modifier = Modifier.clickable { onOpenSmart(key) },
+                        leadingContent = {
+                            Box(
+                                Modifier.size(60.dp).background(
+                                    androidx.compose.ui.graphics.Brush.linearGradient(
+                                        listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.tertiary)
+                                    ), RoundedCornerShape(12.dp)
+                                ),
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(ikon, null, tint = MaterialTheme.colorScheme.onPrimary) }
+                        },
+                        headlineContent = { Text(ad, fontWeight = FontWeight.SemiBold) },
+                        supportingContent = { Text(if (key == "istatistik") "Ne kadar ve neler dinledin" else "Otomatik güncellenir") },
+                    )
+                }
+                Text("Listelerin", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp))
+                if (playlists.isEmpty()) EmptyState("Henüz çalma listesi yok. Bir şarkıyı ♥ ile beğenince \"Beğendiklerim\" listesi oluşur.")
+            }
+            items(playlists.sortedByDescending { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }, key = { it.id }) { p ->
                 var expanded by remember { mutableStateOf(false) }
                 val first = playlistCoverOf(p) ?: p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
                 ListItem(

@@ -111,7 +111,7 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
 }
 
 @Composable
-fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit = {}) {
+fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue: () -> Unit = {}, ekstra: OynaticiEkstra = OynaticiEkstra()) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     var swipe by remember { mutableFloatStateOf(0f) }
@@ -162,6 +162,7 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue
                     Text("ŞİMDİ ÇALIYOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp,
                         color = c.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
+                    UykuDugmesi(ekstra)
                     IconButton(onClick = onOpenQueue) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, "Sıra")
                     }
@@ -176,14 +177,14 @@ fun FullPlayer(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, onOpenQueue
                         Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                             CoverArt(ui, neon)
                         }
-                        Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm) }
+                        Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm, ekstra) }
                     }
                 } else {
                     Box(
                         Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp),
                         contentAlignment = Alignment.Center,
                     ) { CoverArt(ui, neon) }
-                    InfoAndControls(ui, vm)
+                    InfoAndControls(ui, vm, ekstra)
                     Spacer(Modifier.height(36.dp))
                 }
             }
@@ -212,18 +213,30 @@ private fun CoverArt(ui: PlayerUi, neon: Boolean) {
 }
 
 @Composable
-private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel) {
+private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEkstra) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
-    Column(Modifier.fillMaxWidth()) {
-        Text(ui.title.orEmpty(), style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (ui.artist.isNotBlank()) {
-            Text(ui.artist, style = MaterialTheme.typography.titleMedium, color = c.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(ui.title.orEmpty(), style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (ui.artist.isNotBlank()) {
+                Text(ui.artist, style = MaterialTheme.typography.titleMedium, color = c.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        // ♥ Beğen
+        IconButton(onClick = ekstra.onLike) {
+            Icon(
+                if (ekstra.liked) androidx.compose.material.icons.Icons.Default.Favorite
+                else androidx.compose.material.icons.Icons.Default.FavoriteBorder,
+                if (ekstra.liked) "Beğenmekten vazgeç" else "Beğen",
+                tint = if (ekstra.liked) c.primary else c.onSurfaceVariant,
+                modifier = Modifier.size(28.dp),
+            )
         }
     }
 
@@ -277,6 +290,57 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel) {
                 if (ui.repeat == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
                 "Tekrar", tint = if (ui.repeat == Player.REPEAT_MODE_OFF) off else c.primary,
             )
+        }
+    }
+
+    // Şarkı sözleri
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
+        androidx.compose.material3.TextButton(onClick = ekstra.onLyrics) {
+            Icon(androidx.compose.material.icons.Icons.Default.Lyrics, null)
+            Spacer(Modifier.width(6.dp))
+            Text("Şarkı sözleri")
+        }
+    }
+}
+
+/** Tam ekran oynatıcıya dışarıdan verilenler: beğeni, sözler, uyku zamanlayıcısı. */
+class OynaticiEkstra(
+    val liked: Boolean = false,
+    val onLike: () -> Unit = {},
+    val onLyrics: () -> Unit = {},
+    val uyku: Long? = null,
+    val onSleep: (Int) -> Unit = {},
+)
+
+/** ⏾ Uyku zamanlayıcısı: süre seç; açıkken kalan süre görünür. */
+@Composable
+private fun UykuDugmesi(e: OynaticiEkstra) {
+    val c = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Box {
+        if (e.uyku != null) {
+            val kalan = if (e.uyku == -1L) "şarkı sonu" else "${((e.uyku - System.currentTimeMillis()) / 60_000L + 1).coerceAtLeast(1)} dk"
+            androidx.compose.material3.TextButton(onClick = { open = true }) {
+                Icon(androidx.compose.material.icons.Icons.Default.Bedtime, null, tint = c.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(kalan, color = c.primary, style = MaterialTheme.typography.labelLarge)
+            }
+        } else {
+            IconButton(onClick = { open = true }) {
+                Icon(androidx.compose.material.icons.Icons.Default.Bedtime, "Uyku zamanlayıcısı")
+            }
+        }
+        androidx.compose.material3.DropdownMenu(open, { open = false }) {
+            Text("Uyku zamanlayıcısı", style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            listOf(5, 15, 30, 45, 60, 90).forEach { dk ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text("$dk dakika") }, onClick = { open = false; e.onSleep(dk) })
+            }
+            androidx.compose.material3.DropdownMenuItem(text = { Text("Bu şarkı bitince") }, onClick = { open = false; e.onSleep(-1) })
+            if (e.uyku != null) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text("Kapat", color = c.error) }, onClick = { open = false; e.onSleep(0) })
+            }
         }
     }
 }

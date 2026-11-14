@@ -69,6 +69,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             refresh()
+            // Uyku zamanlayıcısı bittiyse ekrandaki göstergeyi kapat
+            val u = _uyku.value
+            if (u != null && !player.playWhenReady &&
+                (u == -1L || u <= System.currentTimeMillis())) _uyku.value = null
             if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION,
                     Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)) refreshSira()
         }
@@ -179,6 +183,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun queueRemove(pos: Int) = komut(SiraKomut.CIKAR, Bundle().apply { putInt("pos", pos) })
     fun queueMove(from: Int, to: Int) = komut(SiraKomut.TASI, Bundle().apply { putInt("from", from); putInt("to", to) })
     fun queueClear() = komut(SiraKomut.TEMIZLE)
+
+    // ---------- Uyku zamanlayıcısı ----------
+    /** null = kapalı, -1 = şarkı bitince, diğer = bitiş zamanı (ms). */
+    private val _uyku = MutableStateFlow<Long?>(null)
+    val uyku = _uyku.asStateFlow()
+
+    fun setSleep(dk: Int) {
+        komut(SiraKomut.UYKU, Bundle().apply { putInt("dk", dk) })
+        _uyku.value = when {
+            dk > 0 -> System.currentTimeMillis() + dk * 60_000L
+            dk == -1 -> -1L
+            else -> null
+        }
+    }
+
+    // ---------- Yumuşak geçiş ----------
+    private val oynaticiPrefs = app.getSharedPreferences("oynatici", android.content.Context.MODE_PRIVATE)
+    var gecisSn: Int
+        get() = oynaticiPrefs.getInt("gecis_sn", 0)
+        set(v) = oynaticiPrefs.edit().putInt("gecis_sn", v).apply()
+
+    // ---------- Şarkı sözleri ----------
+    suspend fun sozler(trackId: String, sureMs: Long): com.dogukan.muzik.data.Sozler? = withContext(Dispatchers.IO) {
+        val t = repo.tracks.value.find { it.id == trackId } ?: return@withContext null
+        com.dogukan.muzik.data.SozKaynagi.getir(getApplication(), t, (sureMs / 1000).toInt())
+    }
+
+    fun sozleriYenile(trackId: String) = com.dogukan.muzik.data.SozKaynagi.sil(getApplication(), trackId)
 
     /** Sıradaki bir şarkıya atla. */
     fun jumpTo(index: Int) {

@@ -99,6 +99,8 @@ data class DownloadTask(
 class MusicRepository private constructor(private val ctx: Context) {
 
     companion object {
+        /** "Beğendiklerim" listesinin sabit kimliği (♥ düğmesi bu listeye ekler). */
+        const val BEGENI_ID = "begendiklerim"
         @Volatile private var instance: MusicRepository? = null
         fun get(c: Context): MusicRepository =
             instance ?: synchronized(this) {
@@ -429,6 +431,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         val id = newTask(url, customTitle ?: url.substringAfterLast('/'))
         scope.launch {
             try {
+                wifiBekle(id)
                 download(id, url, customTitle, existingId)
                 removeTask(id)
             } catch (e: Exception) {
@@ -440,6 +443,36 @@ class MusicRepository private constructor(private val ctx: Context) {
     // ---------------- YouTube (yt-dlp) ----------------
 
     private val prefs = ctx.getSharedPreferences("ayarlar", Context.MODE_PRIVATE)
+
+    /** Mobil veride indirme yapma; Wi-Fi gelince devam et. */
+    var sadeceWifi: Boolean
+        get() = prefs.getBoolean("sadece_wifi", false)
+        set(v) = prefs.edit().putBoolean("sadece_wifi", v).apply()
+
+    /** "Sadece Wi-Fi" açıksa ve mobil verideysek Wi-Fi gelene kadar bekle. */
+    private suspend fun wifiBekle(taskId: String) {
+        val cm = ctx.getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        var bekledi = false
+        while (sadeceWifi && cm.isActiveNetworkMetered) {
+            if (!bekledi) { updateTask(taskId) { it.copy(name = "Wi-Fi bekleniyor · " + it.name) }; bekledi = true }
+            kotlinx.coroutines.delay(5_000)
+        }
+        if (bekledi) updateTask(taskId) { it.copy(name = it.name.removePrefix("Wi-Fi bekleniyor · ")) }
+    }
+
+    /** ♥: şarkıyı "Beğendiklerim" listesine ekler/çıkarır (en yeni en üstte). Beğenildiyse true. */
+    fun toggleLike(trackId: String): Boolean = synchronized(lock) {
+        var list = _playlists.value
+        if (list.none { it.id == BEGENI_ID }) list = listOf(Playlist(BEGENI_ID, "Beğendiklerim", emptyList())) + list
+        var liked = false
+        _playlists.value = list.map { p ->
+            if (p.id != BEGENI_ID) p
+            else if (trackId in p.trackIds) p.copy(trackIds = p.trackIds - trackId)
+            else { liked = true; p.copy(trackIds = listOf(trackId) + p.trackIds) }
+        }
+        savePlaylists()
+        liked
+    }
 
     /** Eklerken telefona indirilsin mi (son seçim hatırlanır). */
     var indirVarsayilan: Boolean
@@ -523,6 +556,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         val id = newTask(source, label)
         scope.launch {
             try {
+                wifiBekle(id)
                 ytSlots.withPermit {
                     ensureYt()
                     val t = ytDownload(id, source, title, artist, coverUrl, existingId)
