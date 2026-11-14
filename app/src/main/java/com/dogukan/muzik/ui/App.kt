@@ -235,6 +235,8 @@ fun App(
                         onRetryDownload = vm.repo::retryDownload,
                         onRetryAll = vm.repo::retryAllFailed,
                         onDismissAll = vm.repo::dismissAllFailed,
+                        shuffle = player.shuffle,
+                        onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
                         fileOf = vm.repo::fileOf,
@@ -251,6 +253,8 @@ fun App(
                         onMove = { t, d -> vm.repo.moveInPlaylist(openPl.id, t.id, d) },
                         onAddTracks = { vm.repo.addTracksToPlaylist(openPl.id, it) },
                         onRemoveMany = { list -> list.forEach { vm.repo.removeFromPlaylist(openPl.id, it.id) } },
+                        shuffle = player.shuffle,
+                        onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
                         onSelDelete = { confirmDelete = it },
                         fileOf = vm.repo::fileOf,
@@ -433,6 +437,8 @@ private fun LibraryScreen(
     onRetryDownload: (String) -> Unit,
     onRetryAll: () -> Unit,
     onDismissAll: () -> Unit,
+    shuffle: Boolean,
+    onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
@@ -511,14 +517,12 @@ private fun LibraryScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
         if (filtered.isNotEmpty()) {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NButton(onClick = { onPlay(filtered, 0, false) }) {
-                    Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Tümünü çal")
-                }
-                NTonalButton(onClick = { onPlay(filtered, filtered.indices.random(), true) }) {
-                    Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık çal")
-                }
-            }
+            PlayControls(
+                shuffle = shuffle,
+                onToggleShuffle = onToggleShuffle,
+                onPlay = { onPlay(filtered, if (shuffle) filtered.indices.random() else 0, null) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
         Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
@@ -786,6 +790,37 @@ private fun PlaylistsScreen(
     }
 }
 
+/**
+ * Spotify'daki gibi: karıştırma düğmesi bir aç/kapa anahtarıdır (açıkken renkli ve altında nokta),
+ * büyük oynat düğmesi bu ayara göre sırayla ya da karışık başlatır.
+ */
+@Composable
+private fun PlayControls(
+    shuffle: Boolean,
+    onToggleShuffle: () -> Unit,
+    onPlay: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = onToggleShuffle) {
+                Icon(Icons.Default.Shuffle, if (shuffle) "Karışık açık" else "Karışık kapalı",
+                    tint = if (shuffle) c.primary else c.onSurfaceVariant, modifier = Modifier.size(28.dp))
+            }
+            Box(Modifier.size(5.dp).background(if (shuffle) c.primary else Color.Transparent, CircleShape))
+        }
+        androidx.compose.material3.FilledIconButton(
+            onClick = onPlay,
+            modifier = Modifier.size(56.dp).neonCerceve(CircleShape),
+            shape = CircleShape,
+            colors = androidx.compose.material3.IconButtonDefaults.filledIconButtonColors(
+                containerColor = c.primary, contentColor = c.onPrimary,
+            ),
+        ) { Icon(Icons.Default.PlayArrow, "Çal", modifier = Modifier.size(32.dp)) }
+    }
+}
+
 @Composable
 private fun SortMenu(current: Siralama, options: List<Siralama>, onPick: (Siralama) -> Unit) {
     var open by remember { mutableStateOf(false) }
@@ -833,6 +868,8 @@ private fun PlaylistDetail(
     onMove: (Track, Int) -> Unit,
     onAddTracks: (List<String>) -> Unit,
     onRemoveMany: (List<Track>) -> Unit,
+    shuffle: Boolean,
+    onToggleShuffle: () -> Unit,
     onSelAddToPlaylist: (List<Track>) -> Unit,
     onSelDelete: (List<Track>) -> Unit,
     fileOf: (Track) -> File,
@@ -929,7 +966,7 @@ private fun PlaylistDetail(
                     }
                 }
             }
-            Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (editing) {
                     NButton(onClick = { showPicker = true }) {
                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Şarkı ekle")
@@ -938,13 +975,15 @@ private fun PlaylistDetail(
                         Icon(Icons.Default.Image, null); Spacer(Modifier.width(4.dp)); Text("Kapak")
                     }
                 } else {
-                    NButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, 0, false) }) {
-                        Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp)); Text("Çal")
-                    }
-                    NTonalButton(enabled = songs.isNotEmpty(), onClick = { onPlay(songs, songs.indices.random(), true) }) {
-                        Icon(Icons.Default.Shuffle, null); Spacer(Modifier.width(4.dp)); Text("Karışık")
-                    }
                     NOutlinedButton(onClick = { showPicker = true }) { Icon(Icons.Default.Add, "Şarkı ekle") }
+                    Spacer(Modifier.weight(1f))
+                    if (songs.isNotEmpty()) {
+                        PlayControls(
+                            shuffle = shuffle,
+                            onToggleShuffle = onToggleShuffle,
+                            onPlay = { onPlay(songs, if (shuffle) songs.indices.random() else 0, null) },
+                        )
+                    }
                 }
             }
             if (editing) {
