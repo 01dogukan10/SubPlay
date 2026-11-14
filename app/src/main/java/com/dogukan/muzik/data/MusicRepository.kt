@@ -171,11 +171,12 @@ class MusicRepository private constructor(private val ctx: Context) {
             val plan = plannedOrder.getOrPut(playlistId) { ConcurrentHashMap() }
             plan[trackId] = order
             _playlists.value = _playlists.value.map { p ->
-                if (p.id != playlistId || trackId in p.trackIds) return@map p
-                val pos = p.trackIds.indexOfLast { id -> plan[id]?.let { it < order } == true } + 1
-                val list = p.trackIds.toMutableList()
+                if (p.id != playlistId) return@map p
+                // Zaten listedeyse yerinden çıkarıp doğru sıraya koy (eski karışık listeler de düzelsin)
+                val list = p.trackIds.toMutableList().apply { remove(trackId) }
+                val pos = list.indexOfLast { id -> plan[id]?.let { it < order } == true } + 1
                 // Önceki sırada şarkı yoksa: planlı şarkıların başına, eski şarkıların sonrasına koy
-                val at = if (pos > 0) pos else (p.trackIds.indexOfFirst { plan.containsKey(it) }.takeIf { it >= 0 } ?: list.size)
+                val at = if (pos > 0) pos else (list.indexOfFirst { plan.containsKey(it) }.takeIf { it >= 0 } ?: list.size)
                 list.add(at, trackId)
                 p.copy(trackIds = list)
             }
