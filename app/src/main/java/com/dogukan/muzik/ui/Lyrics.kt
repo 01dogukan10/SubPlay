@@ -4,6 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -138,5 +143,85 @@ private fun ZamanliSozler(s: Sozler, player: PlayerUi, vm: MainViewModel) {
             )
         }
         item { Spacer(Modifier.height(240.dp)) }
+    }
+}
+
+/** Oynatıcıdaki küçük söz kutusu: çalan satır ortada vurgulu, sözler şarkıyla birlikte akar. */
+@Composable
+fun SozKutusu(player: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val id = player.currentId
+    val sureHazir = player.duration > 0
+    var sozler by remember(id) { mutableStateOf<Sozler?>(null) }
+    var durum by remember(id) { mutableStateOf("yukleniyor") } // yukleniyor, hazir, yok, hata
+    LaunchedEffect(id, sureHazir) {
+        if (id == null || !sureHazir) return@LaunchedEffect
+        durum = "yukleniyor"
+        durum = try {
+            val s = vm.sozler(id, player.duration)
+            sozler = s
+            if (s == null || s.bos || (s.enstrumantal && !s.zamanli && s.duz.isNullOrBlank())) "yok" else "hazir"
+        } catch (e: Exception) { "hata" }
+    }
+    val sekil = RoundedCornerShape(16.dp)
+    Box(
+        Modifier.fillMaxWidth().height(116.dp).clip(sekil)
+            .background(c.surfaceVariant.copy(alpha = 0.55f))
+            .then(if (LocalNeon.current) Modifier.neonCerceve(sekil) else Modifier)
+            .clickable(onClick = onOpen),
+        contentAlignment = Alignment.Center,
+    ) {
+        val s = sozler
+        when {
+            durum == "yukleniyor" -> Text("Sözler yükleniyor…", color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            durum == "hata" -> Text("Sözler alınamadı", color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            durum == "yok" || s == null -> Text(
+                if (s?.enstrumantal == true) "♪ Enstrümantal ♪" else "Bu şarkının sözleri bulunamadı",
+                color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
+            )
+            s.zamanli -> {
+                val aktif = s.satirlar.indexOfLast { it.first <= player.position + 300 }.coerceAtLeast(0)
+                val state = rememberLazyListState()
+                LaunchedEffect(aktif, id) { state.animateScrollToItem((aktif - 1).coerceAtLeast(0)) }
+                LazyColumn(
+                    Modifier.fillMaxSize().padding(horizontal = 16.dp)
+                        // Kenarlarda yarım kalan satırlar yumuşakça kaybolsun
+                        .graphicsLayer { compositingStrategy = androidx.compose.ui.graphics.CompositingStrategy.Offscreen }
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                Brush.verticalGradient(
+                                    0f to androidx.compose.ui.graphics.Color.Transparent,
+                                    0.22f to androidx.compose.ui.graphics.Color.Black,
+                                    0.78f to androidx.compose.ui.graphics.Color.Black,
+                                    1f to androidx.compose.ui.graphics.Color.Transparent,
+                                ),
+                                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn,
+                            )
+                        },
+                    state = state, userScrollEnabled = false,
+                ) {
+                    if (aktif == 0) item { Spacer(Modifier.height(30.dp)) }
+                    itemsIndexed(s.satirlar) { i, (_, text) ->
+                        Text(
+                            text.ifBlank { "♪" },
+                            style = if (i == aktif) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (i == aktif) FontWeight.Bold else FontWeight.Normal,
+                            color = if (i == aktif) c.primary else c.onSurfaceVariant.copy(alpha = if (i < aktif) 0.5f else 0.85f),
+                            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        )
+                    }
+                    item { Spacer(Modifier.height(60.dp)) }
+                }
+            }
+            else -> Text(
+                // Zamanlı değilse sözlerin başı; tamamı için dokun
+                s.duz.orEmpty().trim(),
+                color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center, maxLines = 4, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+        }
     }
 }

@@ -1,6 +1,7 @@
 name: APK
 on:
   push:
+    branches-ignore: [emulator]
   workflow_dispatch:
 permissions:
   contents: write

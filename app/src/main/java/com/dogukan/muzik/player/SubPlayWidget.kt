@@ -33,7 +33,7 @@ class SubPlayWidget : AppWidgetProvider() {
                 .putString("baslik", md.title?.toString() ?: "SubPlay")
                 .putString("sanatci", md.artist?.toString().orEmpty())
                 .putBoolean("caliyor", p.isPlaying)
-                .putString("kapak", if (art?.scheme == "file") art.path else null)
+                .putString("kapak", KapakSaglayici.dosyaYolu(c, art))
                 .apply()
             val m = AppWidgetManager.getInstance(c)
             val ids = m.getAppWidgetIds(ComponentName(c, SubPlayWidget::class.java))

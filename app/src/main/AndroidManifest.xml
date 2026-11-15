@@ -18,6 +18,11 @@
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">
 
+        <!-- Kapak resimleri: bildirim / kilit ekranı / Bluetooth / Android Auto okuyabilsin (sadece okunur) -->
+        <provider
+            android:name="com.dogukan.muzik.player.KapakSaglayici"
+            android:authorities="${applicationId}.kapak"
+            android:exported="true" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -1,5 +1,6 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -679,7 +680,33 @@ private fun LibraryScreen(
         else sorted.filter { it.title.lowercase(TR).contains(q) || it.artist.lowercase(TR).contains(q) }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    // Aşağı kaydırınca üstteki başlık, arama ve çal düğmeleri gizlenir; yukarı kaydırınca geri gelir
+    var ustAcik by rememberSaveable { mutableStateOf(true) }
+    val esik = with(androidx.compose.ui.platform.LocalDensity.current) { 32.dp.toPx() }
+    val kaydirma = remember(esik) {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            var birikim = 0f
+            override fun onPreScroll(available: androidx.compose.ui.geometry.Offset, source: androidx.compose.ui.input.nestedscroll.NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                val dy = available.y
+                if (dy == 0f) return androidx.compose.ui.geometry.Offset.Zero
+                if ((dy < 0) != (birikim < 0)) birikim = 0f // yön değişti
+                birikim += dy
+                if (birikim < -esik) { ustAcik = false; birikim = 0f }
+                else if (birikim > esik) { ustAcik = true; birikim = 0f }
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
+    // Arama yazılırken ya da liste kısayken hep açık
+    LaunchedEffect(query) { ustAcik = true }
+    // Kaydırma çubuğuyla en üste gelinince de aç
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 }
+            .collect { if (it) ustAcik = true }
+    }
+    var gorunum by rememberSaveable { mutableStateOf("sarki") }
+
+    Column(Modifier.fillMaxSize().nestedScroll(kaydirma)) {
         if (selecting) {
             SelectionBar(
                 count = selected.size,
@@ -702,7 +729,14 @@ private fun LibraryScreen(
                     onRemove = { onSelDelete(tracks.filter { it.id in selected }); selected = emptySet() },
                 )
             }
-        } else {
+        }
+        androidx.compose.animation.AnimatedVisibility(
+            visible = ustAcik,
+            enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+        ) {
+        Column {
+        if (!selecting) {
             ScreenTitle("Kütüphane") {
                 if (tracks.isNotEmpty()) ShareMenu("Kütüphanem", { filtered }, fileOf)
             }
@@ -744,23 +778,24 @@ private fun LibraryScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
         // Görünüm: şarkılar / sanatçılar / albümler
-        var gorunum by rememberSaveable { mutableStateOf("sarki") }
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("sarki" to "Şarkılar", "sanatci" to "Sanatçılar", "album" to "Albümler").forEach { (k, ad) ->
                 androidx.compose.material3.FilterChip(selected = gorunum == k, onClick = { gorunum = k }, label = { Text(ad) })
             }
         }
-        if (gorunum != "sarki") {
-            GrupListesi(tracks, query, gorunum, coverOf, onOpenGrup)
-            return@Column
-        }
-        if (filtered.isNotEmpty()) {
+        if (gorunum == "sarki" && filtered.isNotEmpty()) {
             PlayControls(
                 shuffle = shuffle,
                 onToggleShuffle = onToggleShuffle,
                 onPlay = { onPlay(filtered, if (shuffle) filtered.indices.random() else 0, null) },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
+        }
+        }
+        }
+        if (gorunum != "sarki") {
+            GrupListesi(tracks, query, gorunum, coverOf, onOpenGrup)
+            return@Column
         }
         Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {

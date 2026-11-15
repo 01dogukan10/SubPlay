@@ -1,5 +1,8 @@
 package com.dogukan.muzik.player
 
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
@@ -49,7 +52,8 @@ object SiraKomut {
     const val UYKU = "uyku"                // dk: Int (>0 dakika, -1 şarkı bitince, 0 kapat)
     const val ONERI_EKLE = "oneri.ekle"    // ids, titles, artists: String[] (akıllı karıştırma)
     const val ONERI_TEMIZLE = "oneri.temizle"
-    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE)
+    const val ONERI_DOLDUR = "oneri.doldur"  // akıllı karıştırma: çalana göre yeni öneri getir
+    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE, ONERI_DOLDUR)
 }
 
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
@@ -70,7 +74,7 @@ object MedyaOge {
                 MediaMetadata.Builder()
                     .setTitle(t.title)
                     .setArtist(t.artist.ifBlank { null })
-                    .setArtworkUri(repo.coverOf(t)?.let { Uri.fromFile(it) })
+                    .setArtworkUri(repo.kapakUri(t))
                     .setExtras(extras)
                     .build()
             )
@@ -299,8 +303,36 @@ class PlaybackService : MediaLibraryService() {
         }.toMutableList()
     }
 
+    // Öneriler sıraya eklenince sırayla önbelleğe iner (aynı anda tek indirme)
+    private val onbellekSirasi = kotlinx.coroutines.sync.Mutex()
+    private val onbellekIsleri = HashMap<String, kotlinx.coroutines.Job>()
+
+    private fun onbellegeAl(vid: String) {
+        if (onbellekIsleri[vid]?.isActive == true) return
+        val repo = MusicRepository.get(this)
+        onbellekIsleri[vid] = isScope.launch {
+            onbellekSirasi.withLock { runCatching { repo.oneriyiOnbellegeAl(vid) } }
+            onbellekIsleri.remove(vid)
+        }
+    }
+
+    private fun onbellektenSil(vid: String) {
+        onbellekIsleri.remove(vid)?.cancel()
+        MusicRepository.get(this).oneriyiSil(vid)
+    }
+
+    /** Oynatıcıda artık olmayan önerilerin önbelleğini sil. */
+    private fun onbellegiEsitle() {
+        val var_ = (0 until player.mediaItemCount).mapNotNull {
+            player.getMediaItemAt(it).mediaId.takeIf { id -> id.startsWith("oneri:") }?.removePrefix("oneri:")
+        }.toSet()
+        onbellekIsleri.keys.filter { it !in var_ }.forEach { onbellekIsleri.remove(it)?.cancel() }
+        MusicRepository.get(this).oneriOnbellegiTemizle(var_)
+    }
+
     private fun oneriEkle(items: List<MediaItem>) {
         if (items.isEmpty() || player.mediaItemCount == 0) return
+        items.forEach { onbellegeAl(it.mediaId.removePrefix("oneri:")) }
         val shuffle = player.shuffleModeEnabled
         val eski = if (shuffle) karisikSira() else null
         val blok = sirayiAl(shuffle).size
@@ -318,6 +350,46 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    // ---------------- Akıllı karıştırma ----------------
+    // Çalan şarkıya göre öneri getirilir; önümüzdeki şarkılarda öneri azalınca yenisi eklenir, hiç bitmez.
+    private val isScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+    private var oneriIsi: kotlinx.coroutines.Job? = null
+    private val onerilenler = LinkedHashSet<String>() // bu oturumda önerilenler (tekrar etmesin)
+    private var sonUyari = 0L
+
+    private fun akilliDoldur(zorla: Boolean = false) {
+        if (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled || player.mediaItemCount == 0) return
+        if (oneriIsi?.isActive == true) return
+        val yakin = sonrakiler(true).take(10)
+        val oneriSayisi = yakin.count { player.getMediaItemAt(it).mediaId.startsWith("oneri:") }
+        if (!zorla && oneriSayisi >= 2) return
+        val cur = player.currentMediaItem ?: return
+        val repo = MusicRepository.get(this)
+        val curId = cur.mediaId
+        val vid = if (curId.startsWith("oneri:")) curId.removePrefix("oneri:") else null
+        val track = if (vid == null) repo.tracks.value.firstOrNull { it.id == curId } else null
+        val haric = HashSet(onerilenler).apply {
+            (0 until player.mediaItemCount).forEach { i ->
+                player.getMediaItemAt(i).mediaId.takeIf { it.startsWith("oneri:") }?.let { add(it.removePrefix("oneri:")) }
+            }
+        }
+        oneriIsi = isScope.launch {
+            val list = runCatching { repo.oneriCalandan(vid, track, 3, haric) }.getOrElse { emptyList() }
+            if (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled) return@launch
+            if (list.isEmpty()) {
+                // Uyarıyı sık sık gösterme
+                if (zorla && System.currentTimeMillis() - sonUyari > 60_000) {
+                    sonUyari = System.currentTimeMillis()
+                    repo.notice("Akıllı karıştırma için öneri bulunamadı. İnternet bağlantını kontrol et.")
+                }
+                return@launch
+            }
+            list.forEach { onerilenler += it.videoId }
+            while (onerilenler.size > 300) onerilenler.remove(onerilenler.first())
+            oneriEkle(list.map { MedyaOge.oneri(it.videoId, it.title, it.artist) })
+        }
+    }
+
     private fun oneriTemizle() {
         val cur = player.currentMediaItemIndex
         (0 until player.mediaItemCount).filter { it != cur && player.getMediaItemAt(it).mediaId.startsWith("oneri:") }
@@ -328,13 +400,18 @@ class PlaybackService : MediaLibraryService() {
         super.onCreate()
         // İndirilmemiş şarkılar: "subplay://akis/<id>" adresi çalınacağı an gerçek internet adresine çevrilir
         val repo = MusicRepository.get(this)
+        repo.oneriOnbellegiTemizle() // önceki oturumdan kalan öneri önbelleği
         val http = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
         val resolving = ResolvingDataSource.Factory(DefaultDataSource.Factory(this, http)) { spec ->
             when {
                 spec.uri.scheme != "subplay" -> spec
-                spec.uri.host == "yt" -> spec.withUri(Uri.parse(repo.streamUrlVideo(spec.uri.lastPathSegment.orEmpty())))
+                // Akıllı karıştırma önerisi: önbelleğe indiyse oradan, inmediyse internetten
+                spec.uri.host == "yt" -> spec.uri.lastPathSegment.orEmpty().let { vid ->
+                    repo.oneriDosyasi(vid)?.let { spec.withUri(Uri.fromFile(it)) }
+                        ?: spec.withUri(Uri.parse(repo.streamUrlVideo(vid)))
+                }
                 else -> spec.withUri(Uri.parse(repo.streamUrl(spec.uri.lastPathSegment.orEmpty())))
             }
         }
@@ -403,6 +480,7 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (reason == Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED) main.post { onbellegiEsitle() }
                 // Liste doluyken tamamen boşaltıldıysa kaydı da sil
                 if (player.mediaItemCount > 0) ogeVardi = true
                 else if (ogeVardi) { ogeVardi = false; KayitliKuyruk.sil(this@PlaybackService) }
@@ -410,11 +488,17 @@ class PlaybackService : MediaLibraryService() {
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // Önceki şarkının dinlenme süresini kaydet, yenisini saymaya başla
+                // Çalınıp geçilen öneri şarkısının önbelleğini sil
+                val oncekiId = dinlenenId
                 dinlemeyiKaydet()
+                if (oncekiId != null && oncekiId.startsWith("oneri:") && oncekiId != mediaItem?.mediaId) {
+                    main.post { onbellektenSil(oncekiId.removePrefix("oneri:")) }
+                }
                 dinlenenId = mediaItem?.mediaId
                 dinlemeBas = System.currentTimeMillis()
                 normHesapla(mediaItem)
                 main.post { KayitliKuyruk.kaydet(this@PlaybackService, player) }
+                main.post { akilliDoldur() }
                 mediaItem?.mediaId?.takeIf { !it.startsWith("oneri:") }?.let { prefs.edit().putString("son_calan", it).apply() }
                 // Sıradaki şarkının internet adresini önceden bul
                 main.post {
@@ -568,7 +652,8 @@ class PlaybackService : MediaLibraryService() {
                             val artists = args.getStringArray("artists").orEmpty()
                             oneriEkle(ids.indices.map { MedyaOge.oneri(ids[it], titles.getOrElse(it) { "" }, artists.getOrElse(it) { "" }) })
                         }
-                        SiraKomut.ONERI_TEMIZLE -> oneriTemizle()
+                        SiraKomut.ONERI_TEMIZLE -> { oneriTemizle(); oneriIsi?.cancel(); oneriIsi = null }
+                        SiraKomut.ONERI_DOLDUR -> akilliDoldur(zorla = true)
                     }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
@@ -677,6 +762,8 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         main.removeCallbacks(tick)
+        runCatching { isScope.cancel() }
+        runCatching { MusicRepository.get(this).oneriOnbellegiTemizle() }
         if (::player.isInitialized) KayitliKuyruk.kaydet(this, player)
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefDinleyici) }
         runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }

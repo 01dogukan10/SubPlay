@@ -228,6 +228,9 @@ class MusicRepository private constructor(private val ctx: Context) {
     }
     fun coverOf(t: Track): File? = t.cover?.let { File(coversDir, it) }?.takeIf { it.exists() }
 
+    /** Bildirim, kilit ekranı, Bluetooth ve Android Auto'nun da okuyabildiği kapak adresi. */
+    fun kapakUri(t: Track): android.net.Uri? = coverOf(t)?.let { com.dogukan.muzik.player.KapakSaglayici.uri(ctx, it) }
+
     /** Kapak resmini indirip kaydeder, dosya adını döndürür (başarısızsa null). */
     private fun saveCover(trackId: String, url: String?): String? {
         if (url.isNullOrBlank() || !url.startsWith("http")) return null
@@ -986,6 +989,99 @@ class MusicRepository private constructor(private val ctx: Context) {
             if (out.size >= adet * 2) break
         }
         out.values.shuffled().take(adet)
+    }
+
+    /**
+     * Çalan şarkıya göre öneri (YouTube Mix). vid: çalanın YouTube kimliği (biliniyorsa), t: kütüphanedeki şarkı.
+     * haric: zaten sırada olan / daha önce önerilmiş kimlikler.
+     */
+    suspend fun oneriCalandan(vid: String?, t: Track?, adet: Int, haric: Set<String>): List<Oneri> = withContext(Dispatchers.IO) {
+        ensureYt()
+        val have = _tracks.value.flatMap { listOfNotNull(it.videoId, ytId(it.sourceUrl)) }.toMutableSet()
+        val v = vid ?: t?.let { it.videoId ?: ytId(it.sourceUrl) }
+            ?: t?.let { runCatching { aramaIdBul("${it.artist} ${it.title}".trim()) }.getOrNull() }
+            ?: return@withContext emptyList()
+        val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$v&list=RD$v").apply {
+            addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "25")
+        }
+        val json = runCatching {
+            val o = YoutubeDL.getInstance().execute(req).out
+            JSONObject(o.substring(o.indexOf('{')))
+        }.getOrNull() ?: return@withContext emptyList()
+        val entries = json.optJSONArray("entries") ?: return@withContext emptyList()
+        val out = ArrayList<Oneri>()
+        for (i in 0 until entries.length()) {
+            val e = entries.optJSONObject(i) ?: continue
+            val id = e.optString("id")
+            if (id.length != 11 || id == v || id in have || id in haric || out.any { it.videoId == id }) continue
+            val (ad, sanatci) = ytAdSanatci(e.optString("title"), e.optString("channel").ifBlank { e.optString("uploader") })
+            if (ad.isBlank()) continue
+            out += Oneri(id, ad, sanatci)
+        }
+        // Mix'in ilk sıraları çalana en yakın olanlar; onlardan rastgele seç
+        out.take(12).shuffled().take(adet)
+    }
+
+    // ---------------- Akıllı karıştırma önbelleği ----------------
+    // Öneri şarkıları kütüphaneye inmez; sıraya eklenince geçici olarak önbelleğe iner,
+    // çalınıp geçilince (ya da sıradan çıkınca) silinir.
+    private val oneriKlasoru: File get() = File(ctx.cacheDir, "oneri").apply { mkdirs() }
+
+    /** Önbelleğe tamamen inmiş öneri dosyası (yoksa null). */
+    fun oneriDosyasi(vid: String): File? =
+        oneriKlasoru.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("$vid.") }
+
+    suspend fun oneriyiOnbellegeAl(vid: String) = withContext(Dispatchers.IO) {
+        if (oneriDosyasi(vid) != null) return@withContext
+        ensureYt()
+        val tmp = File(oneriKlasoru, "_$vid").apply { deleteRecursively(); mkdirs() }
+        try {
+            val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$vid").apply {
+                addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                addOption("--no-playlist"); addOption("--no-mtime")
+                addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
+            }
+            YoutubeDL.getInstance().execute(req, "oneri_$vid") { _, _, _ -> }
+            val f = tmp.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") }
+                ?: throw IOException("Öneri önbelleğe inmedi")
+            f.renameTo(File(oneriKlasoru, "$vid.${f.extension.ifBlank { "m4a" }}"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    /**
+     * Beğenilen öneri: önbelleğe inmişse o dosyayı kütüphaneye indirilmiş şarkı olarak kaydet,
+     * henüz inmediyse normal şekilde indir.
+     */
+    fun oneriyiKaydet(trackId: String, vid: String) {
+        scope.launch(Dispatchers.IO) {
+            val t = _tracks.value.find { it.id == trackId } ?: return@launch
+            if (t.indirildi && fileOf(t).exists()) return@launch
+            val f = oneriDosyasi(vid)
+            if (f == null) { downloadTracks(listOf(t)); return@launch }
+            val target = uniqueFile(sanitize(t.title).ifBlank { "sarki" }, f.extension.ifBlank { "m4a" })
+            if (runCatching { f.copyTo(target) }.isFailure) { downloadTracks(listOf(t)); return@launch }
+            updateTrack(trackId) { it.copy(fileName = target.name) }
+            sesOlcumuBaslat()
+        }
+    }
+
+    /** Bir önerinin önbellek dosyasını (ve süren indirmesini) sil. */
+    fun oneriyiSil(vid: String) {
+        runCatching { YoutubeDL.getInstance().destroyProcessById("oneri_$vid") }
+        oneriKlasoru.listFiles()?.filter { it.name.startsWith("$vid.") || it.name == "_$vid" }?.forEach { it.deleteRecursively() }
+    }
+
+    /** "tut" dışındaki tüm öneri önbelleğini sil. */
+    fun oneriOnbellegiTemizle(tut: Set<String> = emptySet()) {
+        oneriKlasoru.listFiles()?.forEach { f ->
+            val vid = f.name.removePrefix("_").substringBefore('.')
+            if (vid !in tut) {
+                if (f.name.startsWith("_")) runCatching { YoutubeDL.getInstance().destroyProcessById("oneri_$vid") }
+                f.deleteRecursively()
+            }
+        }
     }
 
     /** Önerilen şarkıyı kütüphaneye (indirmeden) ekler; şarkı kimliğini döndürür. */

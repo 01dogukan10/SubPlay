@@ -45,6 +45,7 @@ data class PlayerUi(
     val duration: Long = 0,
     val shuffle: Boolean = false,
     val akilli: Boolean = false, // akıllı karıştırma (öneri ekleyen)
+    val oneri: Boolean = false,  // çalan şarkı akıllı karıştırmanın önerisi
     val repeat: Int = Player.REPEAT_MODE_OFF,
 )
 
@@ -246,6 +247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val item = c.currentMediaItem
         _ui.value = PlayerUi(
             currentId = item?.mediaId,
+            oneri = item?.mediaId?.startsWith("oneri:") == true,
             title = item?.let { c.mediaMetadata.title?.toString() ?: it.mediaMetadata.title?.toString() ?: "" },
             artist = c.mediaMetadata.artist?.toString().orEmpty(),
             artwork = c.mediaMetadata.artworkUri,
@@ -302,37 +304,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .edit().putBoolean("akilli", on).apply()
     }
 
-    private var oneriIsi: kotlinx.coroutines.Job? = null
 
     /** Çalan listeye benzeyen şarkıları bulup sıraya serpiştirir. */
-    private fun onerileriGetir() {
-        val c = controller ?: return
-        val byId = repo.tracks.value.associateBy { it.id }
-        val queue = (0 until c.mediaItemCount).mapNotNull { byId[c.getMediaItemAt(it).mediaId] }
-        if (queue.isEmpty()) return
-        val adet = (queue.size / 3).coerceIn(5, 20)
-        oneriIsi?.cancel()
-        oneriIsi = viewModelScope.launch {
-            val list = runCatching { repo.oneriler(queue.shuffled().take(10), adet) }.getOrElse { emptyList() }
-            if (!_akilli.value) return@launch
-            if (list.isEmpty()) { repo.notice("Akıllı karıştırma için öneri bulunamadı. İnternet bağlantını kontrol et."); return@launch }
-            komut(SiraKomut.ONERI_EKLE, Bundle().apply {
-                putStringArray("ids", list.map { it.videoId }.toTypedArray())
-                putStringArray("titles", list.map { it.title }.toTypedArray())
-                putStringArray("artists", list.map { it.artist }.toTypedArray())
-            })
-        }
-    }
+    /** Akıllı karıştırma: önerileri servis çalan şarkıya göre getirir ve dinledikçe yenisini ekler. */
+    private fun onerileriGetir() = komut(SiraKomut.ONERI_DOLDUR)
+
 
     /** ♥: çalan şarkı öneriyse önce kütüphaneye ekler. Beğenildiyse true. */
     fun begenCalani(): Boolean? {
         val c = controller ?: return null
         val item = c.currentMediaItem ?: return null
-        val id = if (item.mediaId.startsWith("oneri:")) {
-            repo.oneriyiEkle(com.dogukan.muzik.data.Oneri(item.mediaId.removePrefix("oneri:"),
+        val oneri = item.mediaId.startsWith("oneri:")
+        val vid = item.mediaId.removePrefix("oneri:")
+        val id = if (oneri) {
+            repo.oneriyiEkle(com.dogukan.muzik.data.Oneri(vid,
                 item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty()))
         } else item.mediaId
-        return repo.toggleLike(id)
+        val begenildi = repo.toggleLike(id)
+        // Beğenilen öneri kütüphaneye indirilmiş olarak kaydedilir (önbellekteki dosyayla)
+        if (oneri && begenildi) repo.oneriyiKaydet(id, vid)
+        return begenildi
     }
     fun cycleRepeat() {
         controller?.let {

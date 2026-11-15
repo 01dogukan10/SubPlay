@@ -44,13 +44,14 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - Alttaki küçük oynatıcıya dokununca **büyük oynatıcı** açılır. Aşağı kaydırarak kapatırsın.
 - **Tümünü çal** ve **Karışık çal** düğmeleri kütüphanenin ve listelerin üstündedir.
 
-- **Şarkı sözleri:** büyük oynatıcıdaki "Şarkı sözleri" düğmesi. Zamanlı sözlerde çalan satır vurgulanır, satıra dokununca şarkı oraya gider.
+- **Şarkı sözleri:** büyük oynatıcıda kontrollerin altındaki kutuda kendiliğinden görünür, şarkıyla birlikte akar. Kutuya dokununca tam ekran açılır; orada satıra dokununca şarkı oraya gider.
 - **Uyku zamanlayıcısı:** büyük oynatıcıda ⏾. Belirli bir süre sonra ya da şarkı bitince müzik yavaşça durur.
 - **Kaldığı yerden devam:** uygulama kapansa bile çalan liste, şarkı ve saniye hatırlanır; tekrar açınca ▶'ye basman yeterli. Uygulama da en son açık bıraktığın çalma listesinde, sanatçı ya da albüm sayfasında açılır.
+- **Kütüphanede kaydırma:** aşağı kaydırınca üstteki arama ve düğmeler gizlenir, şarkılara daha çok yer kalır; biraz yukarı kaydırınca geri gelir.
 - **Beğen (♥):** beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
 - **Yumuşak geçiş:** Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
 
-- **Akıllı karıştırma:** 🔀 düğmesine ikinci kez basınca (✦ işareti) listeye benzeyen, kütüphanende olmayan şarkılar da araya karışır. Beğendiğini ♥ ile kütüphanene eklersin.
+- **Akıllı karıştırma:** 🔀 düğmesine ikinci kez basınca (✦ işareti) o an çalan şarkıya benzeyen, kütüphanende olmayan şarkılar da araya karışır ve dinledikçe yenileri gelir. Bu şarkıların yanında ✦ simgesi olur. Telefona inmezler; çalmadan önce geçici olarak önbelleğe iner, çalınınca silinirler. Beğendiğini ♥ ile kütüphanene indirilmiş olarak eklersin.
 - **Ekolayzır ve ses dengeleme:** Ayarlar → Ses. Hazır ayarlar (Pop, Rock, Caz…), bant ayarları, bas güçlendirme; ses dengeleme yüksek ve kısık şarkıları aynı seviyeye getirir.
 - **Ana ekran widget'ı:** ana ekrana uzun bas → Widget'lar → SubPlay.
 - **Android Auto:** SubPlay arabada medya uygulaması olarak görünür. Play Store dışından kurulduğu için Android Auto ayarlarında geliştirici modunu açıp "Bilinmeyen kaynaklar"a izin vermen gerekir.

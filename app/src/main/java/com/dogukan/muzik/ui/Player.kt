@@ -1,5 +1,6 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.material.icons.filled.AutoAwesome
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -92,7 +93,10 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Kapak(ui.artwork, Modifier.size(46.dp), corner = 10.dp)
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(ui.title.orEmpty(), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (ui.oneri) { OneriIsareti(16.dp); Spacer(Modifier.width(4.dp)) }
+                        Text(ui.title.orEmpty(), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                     if (ui.artist.isNotBlank()) {
                         Text(ui.artist, style = MaterialTheme.typography.bodySmall, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant)
@@ -185,7 +189,7 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
                         Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
                             CoverArt(ui, neon)
                         }
-                        Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm, ekstra) }
+                        Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm, ekstra, kutu = false) }
                     }
                 } else {
                     Box(
@@ -221,12 +225,19 @@ private fun CoverArt(ui: PlayerUi, neon: Boolean) {
 }
 
 @Composable
-private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEkstra) {
+private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEkstra, kutu: Boolean = true) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
+    if (ui.oneri) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+            OneriIsareti(16.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("Akıllı karıştırma önerisi", style = MaterialTheme.typography.labelMedium, color = c.primary)
+        }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(ui.title.orEmpty(), style = MaterialTheme.typography.headlineSmall,
@@ -299,12 +310,18 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
         }
     }
 
-    // Şarkı sözleri
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
-        androidx.compose.material3.TextButton(onClick = ekstra.onLyrics) {
-            Icon(Icons.Default.Lyrics, null)
-            Spacer(Modifier.width(6.dp))
-            Text("Şarkı sözleri")
+    // Şarkı sözleri: küçük kutuda kendiliğinden görünür; dokununca tam ekran açılır
+    if (kutu) {
+        Spacer(Modifier.height(12.dp))
+        SozKutusu(ui, vm, ekstra.onLyrics)
+    } else {
+        // Yatay ekranda yer dar: sözler için düğme
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
+            androidx.compose.material3.TextButton(onClick = ekstra.onLyrics) {
+                Icon(Icons.Default.Lyrics, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Şarkı sözleri")
+            }
         }
     }
 }
@@ -356,4 +373,11 @@ fun fmt(ms: Long): String {
     val s = ms / 1000
     return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60)
     else "%d:%02d".format(s / 60, s % 60)
+}
+
+/** Akıllı karıştırmadan gelen şarkının simgesi (✦). */
+@Composable
+fun OneriIsareti(boyut: androidx.compose.ui.unit.Dp = 16.dp) {
+    Icon(Icons.Default.AutoAwesome, "Akıllı karıştırma önerisi",
+        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(boyut))
 }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -138,7 +139,10 @@ private fun SiraSatiri(q: SiraOge, onClick: () -> Unit, trailing: (@Composable (
         modifier = Modifier.clickable(onClick = onClick),
         leadingContent = { Kapak(q.artwork, Modifier.size(44.dp), corner = 8.dp) },
         headlineContent = {
-            Text((if (q.trackId.startsWith("oneri:")) "✦ " else "") + q.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (q.trackId.startsWith("oneri:")) { OneriIsareti(16.dp); Spacer(Modifier.width(6.dp)) }
+                Text(q.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         },
         supportingContent = if (q.artist.isNotBlank()) {
             { Text(q.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) }
