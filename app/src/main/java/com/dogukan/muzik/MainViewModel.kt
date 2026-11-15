@@ -128,6 +128,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         future.addListener({
             controller = runCatching { future.get() }.getOrNull()
             controller?.addListener(listener)
+            kaldigiYerdenYukle()
             refresh()
             refreshSira()
         }, ContextCompat.getMainExecutor(app))
@@ -227,6 +228,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Sıradaki bir şarkıya atla. */
     fun jumpTo(index: Int) {
         controller?.let { it.seekTo(index, 0L); it.play() }
+    }
+
+    /** Oynatıcı boşsa (uygulama kapanıp açıldıysa) son çalınan listeyi, şarkıyı ve saniyeyi duraklatılmış olarak yükle. */
+    private fun kaldigiYerdenYukle() {
+        val c = controller ?: return
+        if (c.mediaItemCount > 0) return
+        val (list, idx, pos) = com.dogukan.muzik.player.KayitliKuyruk.oku(getApplication(), repo) ?: return
+        c.setMediaItems(list.map { it.toMediaItem() }, idx, pos)
+        komut(SiraKomut.YENI_KUYRUK)
+        c.prepare() // çalmaya başlatma; kullanıcı ▶'ye basınca kaldığı yerden devam eder
     }
 
     private fun refresh() {

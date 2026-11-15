@@ -46,6 +46,7 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 
 - **Şarkı sözleri:** büyük oynatıcıdaki "Şarkı sözleri" düğmesi. Zamanlı sözlerde çalan satır vurgulanır, satıra dokununca şarkı oraya gider.
 - **Uyku zamanlayıcısı:** büyük oynatıcıda ⏾. Belirli bir süre sonra ya da şarkı bitince müzik yavaşça durur.
+- **Kaldığı yerden devam:** uygulama kapansa bile çalan liste, şarkı ve saniye hatırlanır; tekrar açınca ▶'ye basman yeterli.
 - **Beğen (♥):** beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
 - **Yumuşak geçiş:** Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
 

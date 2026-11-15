@@ -137,6 +137,7 @@ class PlaybackService : MediaLibraryService() {
     private var dinlenenMs = 0L
 
     private val TICK = 250L
+    private var kayitSayac = 0
     private val tick = object : Runnable {
         override fun run() {
             if (::player.isInitialized) adim()
@@ -146,7 +147,11 @@ class PlaybackService : MediaLibraryService() {
 
     /** Her 250 ms: ses (yumuşak geçiş + uyku kısması), uyku süresi, dinleme süresi. */
     private fun adim() {
-        if (player.isPlaying) dinlenenMs += TICK
+        if (player.isPlaying) {
+            dinlenenMs += TICK
+            // Çalarken 5 saniyede bir nerede kaldığını kaydet
+            if (++kayitSayac % 20 == 0) KayitliKuyruk.kaydet(this, player)
+        }
         var v = 1f
         val fade = prefs.getInt("gecis_sn", 0) * 1000L
         val dur = player.duration
@@ -376,7 +381,7 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) artArdaHata = 0
+                if (isPlaying) artArdaHata = 0 else KayitliKuyruk.kaydet(this@PlaybackService, player)
                 SubPlayWidget.guncelle(this@PlaybackService, player)
             }
 
@@ -402,6 +407,7 @@ class PlaybackService : MediaLibraryService() {
                 dinlenenId = mediaItem?.mediaId
                 dinlemeBas = System.currentTimeMillis()
                 normHesapla(mediaItem)
+                main.post { KayitliKuyruk.kaydet(this@PlaybackService, player) }
                 mediaItem?.mediaId?.takeIf { !it.startsWith("oneri:") }?.let { prefs.edit().putString("son_calan", it).apply() }
                 // Sıradaki şarkının internet adresini önceden bul
                 main.post {
@@ -479,6 +485,13 @@ class PlaybackService : MediaLibraryService() {
                     controller: MediaSession.ControllerInfo,
                 ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
                     val repo = MusicRepository.get(this@PlaybackService)
+                    // Kayıtlı liste, şarkı ve saniyeden devam et
+                    KayitliKuyruk.oku(this@PlaybackService, repo)?.let { (list, idx, pos) ->
+                        main.post { if (player.shuffleModeEnabled) karistir() }
+                        return Futures.immediateFuture(
+                            MediaSession.MediaItemsWithStartPosition(list.map { MedyaOge.of(repo, it) }, idx, pos)
+                        )
+                    }
                     val lib = repo.tracks.value.sortedByDescending { it.addedAt }
                     val son = prefs.getString("son_calan", null)
                     val idx = lib.indexOfFirst { it.id == son }.coerceAtLeast(0)
@@ -651,12 +664,14 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        if (::player.isInitialized) KayitliKuyruk.kaydet(this, player)
         val p = session?.player
         if (p == null || !p.playWhenReady || p.mediaItemCount == 0) stopSelf()
     }
 
     override fun onDestroy() {
         main.removeCallbacks(tick)
+        if (::player.isInitialized) KayitliKuyruk.kaydet(this, player)
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefDinleyici) }
         runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }
         dinlemeyiKaydet()
