@@ -234,10 +234,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun kaldigiYerdenYukle() {
         val c = controller ?: return
         if (c.mediaItemCount > 0) return
-        val (list, idx, pos) = com.dogukan.muzik.player.KayitliKuyruk.oku(getApplication(), repo) ?: return
-        c.setMediaItems(list.map { it.toMediaItem() }, idx, pos)
+        val k = com.dogukan.muzik.player.KayitliKuyruk.oku(getApplication(), repo) ?: return
+        c.setMediaItems(k.sarkilar.mapIndexed { i, t -> t.toMediaItem(k.kuyrukta[i]) }, k.index, k.konum)
         komut(SiraKomut.YENI_KUYRUK)
         c.prepare() // çalmaya başlatma; kullanıcı ▶'ye basınca kaldığı yerden devam eder
+        if (c.shuffleModeEnabled && _akilli.value) onerileriGetir()
     }
 
     private fun refresh() {

@@ -138,6 +138,7 @@ class PlaybackService : MediaLibraryService() {
 
     private val TICK = 250L
     private var kayitSayac = 0
+    private var ogeVardi = false
     private val tick = object : Runnable {
         override fun run() {
             if (::player.isInitialized) adim()
@@ -401,6 +402,12 @@ class PlaybackService : MediaLibraryService() {
                 }
             }
 
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                // Liste doluyken tamamen boşaltıldıysa kaydı da sil
+                if (player.mediaItemCount > 0) ogeVardi = true
+                else if (ogeVardi) { ogeVardi = false; KayitliKuyruk.sil(this@PlaybackService) }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 // Önceki şarkının dinlenme süresini kaydet, yenisini saymaya başla
                 dinlemeyiKaydet()
@@ -486,11 +493,10 @@ class PlaybackService : MediaLibraryService() {
                 ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
                     val repo = MusicRepository.get(this@PlaybackService)
                     // Kayıtlı liste, şarkı ve saniyeden devam et
-                    KayitliKuyruk.oku(this@PlaybackService, repo)?.let { (list, idx, pos) ->
+                    KayitliKuyruk.oku(this@PlaybackService, repo)?.let { k ->
                         main.post { if (player.shuffleModeEnabled) karistir() }
-                        return Futures.immediateFuture(
-                            MediaSession.MediaItemsWithStartPosition(list.map { MedyaOge.of(repo, it) }, idx, pos)
-                        )
+                        val items = k.sarkilar.mapIndexed { i, t -> MedyaOge.of(repo, t, k.kuyrukta[i]) }
+                        return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, k.index, k.konum))
                     }
                     val lib = repo.tracks.value.sortedByDescending { it.addedAt }
                     val son = prefs.getString("son_calan", null)

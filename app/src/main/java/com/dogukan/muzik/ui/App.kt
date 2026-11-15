@@ -143,13 +143,31 @@ fun App(
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
 
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var openPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Son açık ekranı hatırla: uygulama tekrar açılınca kaldığın sekme / çalma listesi açılır
+    val ekranPref = remember { ctx.getSharedPreferences("ekran", android.content.Context.MODE_PRIVATE) }
+    // Ayarlar açık kaldıysa kütüphaneden başla
+    var tab by rememberSaveable { mutableIntStateOf(ekranPref.getInt("tab", 0).let { if (it == 1) 1 else 0 }) }
+    var openPlaylistId by rememberSaveable { mutableStateOf(ekranPref.getString("liste", null)) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
     var showLyrics by rememberSaveable { mutableStateOf(false) }
-    var openSmart by rememberSaveable { mutableStateOf<String?>(null) }
-    var openGrup by rememberSaveable { mutableStateOf<String?>(null) } // "sanatci|Ad" ya da "album|Ad"
+    var openSmart by rememberSaveable { mutableStateOf(ekranPref.getString("akilli", null)) }
+    var openGrup by rememberSaveable { mutableStateOf(ekranPref.getString("grup", null)) } // "sanatci|Ad" ya da "album|Ad"
+    // Açık kalan liste / sanatçı / albüm artık yoksa ana sayfaya dön
+    LaunchedEffect(openPlaylistId, playlists) {
+        if (openPlaylistId != null && playlists.none { it.id == openPlaylistId }) openPlaylistId = null
+    }
+    LaunchedEffect(openGrup, tracks) {
+        val g = openGrup ?: return@LaunchedEffect
+        val (tur, ad) = g.split("|", limit = 2).let { it[0] to it.getOrElse(1) { "" } }
+        val var_ = if (tur == "album") tracks.any { it.album == ad }
+            else tracks.any { com.dogukan.muzik.data.anaSanatci(it.artist).equals(ad, ignoreCase = true) }
+        if (!var_) openGrup = null
+    }
+    LaunchedEffect(tab, openPlaylistId, openSmart, openGrup) {
+        ekranPref.edit().putInt("tab", tab).putString("liste", openPlaylistId)
+            .putString("akilli", openSmart).putString("grup", openGrup).apply()
+    }
     var showEq by rememberSaveable { mutableStateOf(false) }
     var adDuzeltmeler by remember { mutableStateOf<List<com.dogukan.muzik.data.AdDuzeltme>?>(null) }
     val uyku by vm.uyku.collectAsStateWithLifecycle()
