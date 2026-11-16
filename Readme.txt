@@ -57,6 +57,7 @@ NASIL KULLANILIR?
 - Kapağa göre renk: büyük oynatıcının arka planı çalan şarkının kapağının renginde olur.
 - Depolama ve çift şarkılar: Ayarlar → Kütüphane'den ne kadar yer kaplandığını görebilir, uzun süredir dinlemediğin indirmeleri silebilir, iki kez eklenmiş şarkıları birleştirebilirsin.
 - Podcast otomatik indirme / silme: Ayarlar → Podcast'ten açılır.
+- Podcast önerileri: Podcast sekmesindeki "Senin için" bölümünde ilgini çeken konuları seç (Teknoloji, Komedi, Tarih…). Seçtiklerine, abone olduklarına ve dinlediklerine göre her konunun en sevilen podcast'leri önerilir. Dil olarak Türkçe ya da İngilizce seçebilirsin; kapağa dokununca abone olursun.
 - Beğen (♥): beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
 - Yumuşak geçiş: Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
 

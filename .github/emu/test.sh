@@ -42,39 +42,17 @@ bekle 25
 sistemPenceresi() { dok; grep -q "isn't responding" $OUT/ui_son.xml && { bas "Wait" || bas "Close app"; bekle 2; }; true; }
 sistemPenceresi
 adb shell am start -n $PKG/$ACT; bekle 8; sistemPenceresi; foto acilis
-
-# Şarkı ekle ve çal (son çalınanlar için 40 sn)
-adb shell am start -n $PKG/$ACT -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-bekle 4; sistemPenceresi; bas "İndir" || bas "Ekle"; bekle 70; sistemPenceresi
-bas "Never"; bekle 40
-# Listeler: son çalınanlar
-sistemPenceresi; bas "Listeler"; bekle 3; foto listeler_son_calinanlar
-# Genel arama
-bas "Kütüphane"; bekle 2; bas "Kütüphanede ara"; adb shell input text "begen"; bekle 3; foto genel_arama
-adb shell input keyevent KEYCODE_BACK; bas "Temizle"; bekle 2
-# Kaldır + Geri al
-bas "Seçenekler"; bekle 2; bas "Kütüphaneden kaldır"; bekle 1; foto kaldirildi_geri_al
-bas "Geri al"; bekle 2; foto geri_alindi
-# Ayarlar: depolama ve çift şarkılar
-bas "Ayarlar"; bekle 2
-for k in 1 2; do adb shell input swipe 540 1800 540 700 300; bekle 1; done
-foto ayarlar_alt
-bas "Depolama"; bekle 4; foto depolama
-adb shell input keyevent KEYCODE_BACK; bekle 2
-bas "Çift şarkıları bul"; bekle 3; foto ciftler
-bas "Tamam" || bas "Vazgeç"; bekle 1
-# Beğen sonrası genel arama: "begen" -> Beğendiklerim listesi
-adb shell input swipe 450 2000 450 1500 250; bekle 4; bas "Beğen"; bekle 2; adb shell input keyevent KEYCODE_BACK; bekle 2
-bas "Kütüphane"; bekle 2; bas "Kütüphanede ara"; adb shell input text "begen"; bekle 3; adb shell input keyevent KEYCODE_BACK; bekle 1; foto genel_arama_liste
-bas "Temizle"; bekle 1
-# Kısayol: karışık çal
-adb shell am start -n $PKG/$ACT -a com.subplay.muzik.KISAYOL -d subplay-kisayol://karisik; bekle 6; foto kisayol_karisik
-# Mini oynatıcıyı yukarı kaydır -> büyük oynatıcı (kapak rengi)
-adb shell input swipe 450 2000 450 1500 250; bekle 4; foto tam_oynatici_kapak_rengi
-bas "Beğen"; bekle 2
-adb shell input keyevent KEYCODE_BACK; bekle 2
-# Bildirim (♥ ve karıştır düğmeleri)
-adb shell cmd statusbar expand-notifications; bekle 3; foto bildirim_dugmeleri
+bas "Podcast"; bekle 3; foto podcast_ilk
+bas "Teknoloji"; bekle 1; bas "Komedi"; bekle 12; foto oneriler_tr
+bas "İngilizce"; bekle 12; foto oneriler_en
+adb shell input swipe 540 1700 540 900 300; bekle 2; foto oneriler_en_asagi
+bas "Tümü"; bekle 3; foto tumu
+adb shell input swipe 540 900 540 1900 300; bekle 1; bas "Kapat"; bekle 2
+dok; python3 - <<'PY' > $OUT/kart.txt
+import re
+x=open('emu-sonuc/ui_son.xml',encoding='utf-8',errors='ignore').read()
+print("ok")
+PY
 kill $LOGPID 2>/dev/null
 grep -E "AndroidRuntime|FATAL|$PKG|SubPlay|yt-dlp|youtubedl" $OUT/logcat.txt | tail -400 > $OUT/logcat_ozet.txt
 exit 0

@@ -87,6 +87,10 @@ fun PodcastEkrani(vm: MainViewModel, player: PlayerUi, toast: (String) -> Unit) 
     var acik by rememberSaveable { mutableStateOf<String?>(null) }
     var sorgu by rememberSaveable { mutableStateOf("") }
     var sonuclar by remember { mutableStateOf<List<PodcastArama>?>(null) }
+    var sonucBaslik by remember { mutableStateOf("Arama sonuçları") }
+    val ilgi by pr.ilgi.collectAsStateWithLifecycle()
+    var dil by remember { mutableStateOf(pr.oneriDili) }
+    val onerilen = remember(ilgi, podcastlar, bolumler) { pr.onerilenKategoriler() }
     var araniyor by remember { mutableStateOf(false) }
     var ekleniyor by remember { mutableStateOf(setOf<String>()) }
 
@@ -124,6 +128,7 @@ fun PodcastEkrani(vm: MainViewModel, player: PlayerUi, toast: (String) -> Unit) 
         if (q.startsWith("http://") || q.startsWith("https://")) { abone(q); return }
         araniyor = true
         scope.launch {
+            sonucBaslik = "Arama sonuçları"
             sonuclar = runCatching { pr.ara(q) }.getOrElse { toast("Arama yapılamadı. İnternet bağlantını kontrol et."); null }
             araniyor = false
         }
@@ -161,11 +166,19 @@ fun PodcastEkrani(vm: MainViewModel, player: PlayerUi, toast: (String) -> Unit) 
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         )
 
-        LazyColumn(Modifier.fillMaxSize()) {
+        val listeDurumu = androidx.compose.foundation.lazy.rememberLazyListState()
+        // Arama sonucu ya da "Tümü" açılınca en üste çık
+        LaunchedEffect(sonuclar) { if (sonuclar != null) listeDurumu.scrollToItem(0) }
+        LazyColumn(Modifier.fillMaxSize(), state = listeDurumu) {
             if (araniyor) item { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
             val s = sonuclar
             if (s != null) {
-                item { Baslik("Arama sonuçları") }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { Baslik(sonucBaslik) }
+                        if (sonucBaslik != "Arama sonuçları") TextButton(onClick = { sonuclar = null }) { Text("Kapat") }
+                    }
+                }
                 if (s.isEmpty()) item { Bilgi("Sonuç bulunamadı.") }
                 items(s, key = { "a" + it.feed }) { r ->
                     val abone = podcastlar.any { it.feed == r.feed }
@@ -193,6 +206,36 @@ fun PodcastEkrani(vm: MainViewModel, player: PlayerUi, toast: (String) -> Unit) 
                 item { Baslik("Kaldığın yerden devam et") }
                 items(devam, key = { "d" + it.id }) { b ->
                     BolumSatiri(b, pr, vm, player, kapakGoster = true, toast = toast)
+                }
+            }
+
+            // Kişisel öneriler: ilgi alanları, aboneliklerin ve dinlediklerine göre
+            if (s == null) {
+                item {
+                    Baslik("Senin için")
+                    Text("Seçtiğin konulara, abone olduklarına ve dinlediklerine göre. İlgini çeken konuları seç:",
+                        style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp))
+                    androidx.compose.foundation.lazy.LazyRow(
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        items(com.dogukan.muzik.data.KATEGORILER, key = { "c" + it.id }) { k ->
+                            androidx.compose.material3.FilterChip(selected = k.id in ilgi, onClick = { pr.ilgiDegistir(k.id) }, label = { Text(k.ad) })
+                        }
+                    }
+                    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Dil:", color = c.onSurfaceVariant)
+                        listOf("tr" to "Türkçe", "en" to "İngilizce").forEach { (k, ad) ->
+                            androidx.compose.material3.FilterChip(selected = dil == k, onClick = { dil = k; pr.oneriDili = k }, label = { Text(ad) })
+                        }
+                    }
+                }
+                if (onerilen.isEmpty()) item { Bilgi("Yukarıdan birkaç konu seç; sana göre podcast'ler burada görünecek.") }
+                items(onerilen, key = { "o" + it.id + dil }) { k ->
+                    KategoriSirasi(k, dil, pr, ekleniyor,
+                        onAbone = { abone(it) },
+                        onTumu = { list -> sonucBaslik = k.ad; sonuclar = list })
                 }
             }
 
@@ -416,3 +459,51 @@ fun AtlaDugmesi(sn: Int, onClick: () -> Unit) {
 
 fun hizYaz(h: Float): String = (if (h == h.toInt().toFloat()) h.toInt().toString() else h.toString().trimEnd('0').trimEnd('.'))
     .replace('.', ',') + "x"
+
+/** Bir kategoride önerilen podcast'ler: yatay kaydırılan kapaklar. Dokununca abone olunur ve açılır. */
+@Composable
+private fun KategoriSirasi(
+    k: com.dogukan.muzik.data.Kategori, dil: String, pr: PodcastRepo, ekleniyor: Set<String>,
+    onAbone: (String) -> Unit, onTumu: (List<PodcastArama>) -> Unit,
+) {
+    val c = MaterialTheme.colorScheme
+    val podcastlar by pr.podcastlar.collectAsStateWithLifecycle()
+    var liste by remember(k.id, dil) { mutableStateOf<List<PodcastArama>?>(null) }
+    var hata by remember(k.id, dil) { mutableStateOf(false) }
+    LaunchedEffect(k.id, dil, podcastlar.size) {
+        runCatching { pr.kategoriOnerileri(k.id, dil) }.onSuccess { liste = it }.onFailure { hata = true }
+    }
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(k.ad, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            val l = liste
+            if (!l.isNullOrEmpty()) TextButton(onClick = { onTumu(l) }) { Text("Tümü") }
+        }
+        val l = liste
+        when {
+            hata -> Bilgi("Öneriler alınamadı. İnternet bağlantını kontrol et.")
+            l == null -> Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(28.dp)) }
+            l.isEmpty() -> Bilgi("Bu konuda yeni öneri yok.")
+            else -> androidx.compose.foundation.lazy.LazyRow(
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(l.take(15), key = { it.feed }) { r ->
+                    Column(Modifier.width(120.dp).clickable(enabled = r.feed !in ekleniyor) { onAbone(r.feed) }) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Kapak(r.kapak, Modifier.size(120.dp), corner = 12.dp)
+                            if (r.feed in ekleniyor) {
+                                Box(Modifier.size(120.dp).background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(12.dp)))
+                                CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                        Text(r.ad, maxLines = 2, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium,
+                            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+                        Text(r.yazar, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
