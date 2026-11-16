@@ -53,7 +53,9 @@ object SiraKomut {
     const val ONERI_EKLE = "oneri.ekle"    // ids, titles, artists: String[] (akıllı karıştırma)
     const val ONERI_TEMIZLE = "oneri.temizle"
     const val ONERI_DOLDUR = "oneri.doldur"  // akıllı karıştırma: çalana göre yeni öneri getir
-    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE, ONERI_DOLDUR)
+    const val BILDIRIM_BEGEN = "bildirim.begen"       // bildirim / kilit ekranı ♥
+    const val BILDIRIM_KARISIK = "bildirim.karisik"   // bildirim / kilit ekranı karıştır
+    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE, ONERI_DOLDUR, BILDIRIM_BEGEN, BILDIRIM_KARISIK)
 }
 
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
@@ -80,6 +82,27 @@ object MedyaOge {
             )
             .build()
     }
+
+    /** Podcast bölümü: indirildiyse dosyadan, değilse internetten çalar. */
+    fun bolum(pr: com.dogukan.muzik.data.PodcastRepo, b: com.dogukan.muzik.data.Bolum): MediaItem {
+        val uri = pr.dosyaOf(b)?.let { Uri.fromFile(it) } ?: Uri.parse(b.ses)
+        val p = pr.podcast(b.podcastId)
+        return MediaItem.Builder()
+            .setMediaId(com.dogukan.muzik.data.PodcastRepo.ON_EK + b.id)
+            .setUri(uri)
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(b.baslik)
+                    .setArtist(p?.ad)
+                    .setArtworkUri((b.kapak ?: p?.kapak)?.let { Uri.parse(it) })
+                    .setExtras(Bundle().apply { putBoolean("kuyruk", false); putBoolean("podcast", true) })
+                    .build()
+            )
+            .build()
+    }
+
+    fun podcastMi(id: String?) = id?.startsWith(com.dogukan.muzik.data.PodcastRepo.ON_EK) == true
 
     fun kuyrukta(item: MediaItem?) = item?.mediaMetadata?.extras?.getBoolean("kuyruk") == true
 
@@ -143,6 +166,14 @@ class PlaybackService : MediaLibraryService() {
     private val TICK = 250L
     private var kayitSayac = 0
     private var ogeVardi = false
+
+    /** Çalan podcast bölümünün kaldığı yerini kaydet. */
+    private fun podcastKonumu() {
+        val id = player.currentMediaItem?.mediaId ?: return
+        if (!MedyaOge.podcastMi(id)) return
+        com.dogukan.muzik.data.PodcastRepo.get(this)
+            .konumKaydet(com.dogukan.muzik.data.PodcastRepo.idOf(id), player.currentPosition, player.duration.coerceAtLeast(0))
+    }
     private val tick = object : Runnable {
         override fun run() {
             if (::player.isInitialized) adim()
@@ -155,7 +186,10 @@ class PlaybackService : MediaLibraryService() {
         if (player.isPlaying) {
             dinlenenMs += TICK
             // Çalarken 5 saniyede bir nerede kaldığını kaydet
-            if (++kayitSayac % 20 == 0) KayitliKuyruk.kaydet(this, player)
+            if (++kayitSayac % 20 == 0) {
+                KayitliKuyruk.kaydet(this, player)
+                podcastKonumu()
+            }
         }
         var v = 1f
         val fade = prefs.getInt("gecis_sn", 0) * 1000L
@@ -350,6 +384,28 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    // ---------------- Bildirim düğmeleri (♥ ve karıştır) ----------------
+    private fun dugmeler(): com.google.common.collect.ImmutableList<androidx.media3.session.CommandButton> {
+        val id = player.currentMediaItem?.mediaId
+        val l = ArrayList<androidx.media3.session.CommandButton>()
+        if (id != null && !MedyaOge.podcastMi(id)) {
+            val begenildi = MusicRepository.get(this).begenildiMi(id)
+            l += androidx.media3.session.CommandButton.Builder()
+                .setDisplayName(if (begenildi) "Beğenmekten vazgeç" else "Beğen")
+                .setIconResId(if (begenildi) com.dogukan.muzik.R.drawable.ic_bildirim_kalp else com.dogukan.muzik.R.drawable.ic_bildirim_kalp_bos)
+                .setSessionCommand(SessionCommand(SiraKomut.BILDIRIM_BEGEN, Bundle.EMPTY))
+                .build()
+        }
+        l += androidx.media3.session.CommandButton.Builder()
+            .setDisplayName(if (player.shuffleModeEnabled) "Karışık kapat" else "Karışık çal")
+            .setIconResId(if (player.shuffleModeEnabled) com.dogukan.muzik.R.drawable.ic_bildirim_karisik_acik else com.dogukan.muzik.R.drawable.ic_bildirim_karisik)
+            .setSessionCommand(SessionCommand(SiraKomut.BILDIRIM_KARISIK, Bundle.EMPTY))
+            .build()
+        return com.google.common.collect.ImmutableList.copyOf(l)
+    }
+
+    private fun dugmeleriGuncelle() { runCatching { session?.setCustomLayout(dugmeler()) } }
+
     // ---------------- Akıllı karıştırma ----------------
     // Çalan şarkıya göre öneri getirilir; önümüzdeki şarkılarda öneri azalınca yenisi eklenir, hiç bitmez.
     private val isScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
@@ -359,6 +415,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun akilliDoldur(zorla: Boolean = false) {
         if (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled || player.mediaItemCount == 0) return
+        if (MedyaOge.podcastMi(player.currentMediaItem?.mediaId)) return
         if (oneriIsi?.isActive == true) return
         val yakin = sonrakiler(true).take(10)
         val oneriSayisi = yakin.count { player.getMediaItemAt(it).mediaId.startsWith("oneri:") }
@@ -435,6 +492,7 @@ class PlaybackService : MediaLibraryService() {
         player.repeatMode = prefs.getInt("tekrar", Player.REPEAT_MODE_OFF)
         player.addListener(object : Player.Listener {
             override fun onShuffleModeEnabledChanged(on: Boolean) {
+                main.post { dugmeleriGuncelle() }
                 prefs.edit().putBoolean("karisik", on).apply()
                 if (on) karistir()
             }
@@ -459,7 +517,7 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (isPlaying) artArdaHata = 0 else KayitliKuyruk.kaydet(this@PlaybackService, player)
+                if (isPlaying) artArdaHata = 0 else { KayitliKuyruk.kaydet(this@PlaybackService, player); podcastKonumu() }
                 SubPlayWidget.guncelle(this@PlaybackService, player)
             }
 
@@ -490,6 +548,13 @@ class PlaybackService : MediaLibraryService() {
                 // Önceki şarkının dinlenme süresini kaydet, yenisini saymaya başla
                 // Çalınıp geçilen öneri şarkısının önbelleğini sil
                 val oncekiId = dinlenenId
+                // Podcast: kendiliğinden bitip geçildiyse dinlendi say; hız sadece podcast'te uygulanır
+                if (MedyaOge.podcastMi(oncekiId) && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                    com.dogukan.muzik.data.PodcastRepo.get(this@PlaybackService)
+                        .dinlendiYap(com.dogukan.muzik.data.PodcastRepo.idOf(oncekiId!!), true, kendiliginden = true)
+                }
+                val hiz = if (MedyaOge.podcastMi(mediaItem?.mediaId)) com.dogukan.muzik.data.PodcastRepo.get(this@PlaybackService).hiz else 1f
+                if (player.playbackParameters.speed != hiz) player.setPlaybackSpeed(hiz)
                 dinlemeyiKaydet()
                 if (oncekiId != null && oncekiId.startsWith("oneri:") && oncekiId != mediaItem?.mediaId) {
                     main.post { onbellektenSil(oncekiId.removePrefix("oneri:")) }
@@ -499,6 +564,7 @@ class PlaybackService : MediaLibraryService() {
                 normHesapla(mediaItem)
                 main.post { KayitliKuyruk.kaydet(this@PlaybackService, player) }
                 main.post { akilliDoldur() }
+                main.post { dugmeleriGuncelle() }
                 mediaItem?.mediaId?.takeIf { !it.startsWith("oneri:") }?.let { prefs.edit().putString("son_calan", it).apply() }
                 // Sıradaki şarkının internet adresini önceden bul
                 main.post {
@@ -579,8 +645,7 @@ class PlaybackService : MediaLibraryService() {
                     // Kayıtlı liste, şarkı ve saniyeden devam et
                     KayitliKuyruk.oku(this@PlaybackService, repo)?.let { k ->
                         main.post { if (player.shuffleModeEnabled) karistir() }
-                        val items = k.sarkilar.mapIndexed { i, t -> MedyaOge.of(repo, t, k.kuyrukta[i]) }
-                        return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(items, k.index, k.konum))
+                        return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(k.ogeler, k.index, k.konum))
                     }
                     val lib = repo.tracks.value.sortedByDescending { it.addedAt }
                     val son = prefs.getString("son_calan", null)
@@ -654,6 +719,12 @@ class PlaybackService : MediaLibraryService() {
                         }
                         SiraKomut.ONERI_TEMIZLE -> { oneriTemizle(); oneriIsi?.cancel(); oneriIsi = null }
                         SiraKomut.ONERI_DOLDUR -> akilliDoldur(zorla = true)
+                        SiraKomut.BILDIRIM_BEGEN -> player.currentMediaItem?.let { m ->
+                            MusicRepository.get(this@PlaybackService).begen(m.mediaId,
+                                m.mediaMetadata.title?.toString().orEmpty(), m.mediaMetadata.artist?.toString().orEmpty())
+                            dugmeleriGuncelle()
+                        }
+                        SiraKomut.BILDIRIM_KARISIK -> { player.shuffleModeEnabled = !player.shuffleModeEnabled; dugmeleriGuncelle() }
                     }
                     return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
@@ -667,6 +738,9 @@ class PlaybackService : MediaLibraryService() {
             })
             .setSessionActivity(openApp)
             .build()
+        dugmeleriGuncelle()
+        // Beğeni başka yerden değişince (uygulama) bildirimdeki ♥ da güncellensin
+        isScope.launch { repo.playlists.collect { dugmeleriGuncelle() } }
     }
 
     // ---------------- Sıra ----------------
@@ -755,7 +829,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (::player.isInitialized) KayitliKuyruk.kaydet(this, player)
+        if (::player.isInitialized) { KayitliKuyruk.kaydet(this, player); podcastKonumu() }
         val p = session?.player
         if (p == null || !p.playWhenReady || p.mediaItemCount == 0) stopSelf()
     }
@@ -764,7 +838,7 @@ class PlaybackService : MediaLibraryService() {
         main.removeCallbacks(tick)
         runCatching { isScope.cancel() }
         runCatching { MusicRepository.get(this).oneriOnbellegiTemizle() }
-        if (::player.isInitialized) KayitliKuyruk.kaydet(this, player)
+        if (::player.isInitialized) { KayitliKuyruk.kaydet(this, player); podcastKonumu() }
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefDinleyici) }
         runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }
         dinlemeyiKaydet()

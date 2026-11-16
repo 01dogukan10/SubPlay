@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
 
     private val sharedUrl = mutableStateOf<String?>(null)
     private val sharedList = mutableStateOf<String?>(null)
+    private val sekme = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -42,6 +43,8 @@ class MainActivity : ComponentActivity() {
                 val vm: MainViewModel = viewModel()
                 App(
                     vm = vm,
+                    sekmeIstegi = sekme.value,
+                    onSekmeAcildi = { sekme.value = null },
                     sharedUrl = sharedUrl.value,
                     onSharedConsumed = { sharedUrl.value = null },
                     sharedList = sharedList.value,
@@ -60,6 +63,12 @@ class MainActivity : ComponentActivity() {
 
     /** Tarayıcıdan "Paylaş → Müzik" ile gelen linki yakala. */
     private fun handleIntent(i: Intent?) {
+        i?.getStringExtra("sekme")?.let { sekme.value = it }
+        // Uygulama simgesi kısayolları: devam / karışık / beğendiklerim
+        if (i?.action == "com.subplay.muzik.KISAYOL") {
+            i.data?.host?.let { com.dogukan.muzik.MainViewModel.bekleyenKisayol.value = it }
+            return
+        }
         if (i?.action == Intent.ACTION_VIEW && i.data?.scheme == "submuzik") {
             // "done" ise sadece uygulamaya dönüş; kod geldiyse girişi tamamla
             i.data?.takeIf { it.getQueryParameter("code") != null || it.getQueryParameter("error") != null }

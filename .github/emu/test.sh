@@ -37,37 +37,44 @@ adb logcat -c
 adb logcat -v time > $OUT/logcat.txt &
 LOGPID=$!
 
-adb shell am start -n $PKG/$ACT; bekle 8; foto acilis
+# Emülatör açılışta sistem uygulamaları takılabiliyor: biraz bekle ve "yanıt vermiyor" pencerelerini kapat
+bekle 25
+sistemPenceresi() { dok; grep -q "isn't responding" $OUT/ui_son.xml && { bas "Wait" || bas "Close app"; bekle 2; }; true; }
+sistemPenceresi
+adb shell am start -n $PKG/$ACT; bekle 8; sistemPenceresi; foto acilis
 
-# Birkaç şarkı ekle (paylaşımla)
-for v in dQw4w9WgXcQ kJQP7kiw5Fk 9bZkp7q19f0 fJ9rUzIMcZQ hT_nvWreIhg; do
-  adb shell am start -n $PKG/$ACT -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "https://www.youtube.com/watch?v=$v"
-  bekle 4; bas "İndir" || bas "Ekle"; bekle 35
-done
-bekle 40; foto kutuphane
-bas "Ayrıntılar için dokun" && { bekle 2; foto indirme_hatalari; dok; cp $OUT/ui_son.xml $OUT/hatalar_ui.xml; bas "Gizlemek için dokun"; }
-
-# Kaydırma: aşağı inince başlık gizlenmeli, yukarı çıkınca gelmeli
-adb shell input swipe 540 1900 540 1100 400; bekle 2; foto asagi_kaydirildi
-adb shell input swipe 540 1200 540 1500 400; bekle 2; foto yukari_kaydirildi
-adb shell input swipe 540 900 540 2000 300; bekle 2
-
-# Akıllı karıştırma: karışık -> akıllı karışık, sonra çal
-bas "Karışık kapalı"; bekle 1; bas "Karışık açık"; bekle 1; foto akilli_secildi
-bas "Çal"; bekle 25
-adb shell cmd statusbar expand-notifications; bekle 3; foto bildirim
+# Şarkı ekle ve çal (son çalınanlar için 40 sn)
+adb shell am start -n $PKG/$ACT -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+bekle 4; sistemPenceresi; bas "İndir" || bas "Ekle"; bekle 70; sistemPenceresi
+bas "Never"; bekle 40
+# Listeler: son çalınanlar
+sistemPenceresi; bas "Listeler"; bekle 3; foto listeler_son_calinanlar
+# Genel arama
+bas "Kütüphane"; bekle 2; bas "Kütüphanede ara"; adb shell input text "begen"; bekle 3; foto genel_arama
+adb shell input keyevent KEYCODE_BACK; bas "Temizle"; bekle 2
+# Kaldır + Geri al
+bas "Seçenekler"; bekle 2; bas "Kütüphaneden kaldır"; bekle 1; foto kaldirildi_geri_al
+bas "Geri al"; bekle 2; foto geri_alindi
+# Ayarlar: depolama ve çift şarkılar
+bas "Ayarlar"; bekle 2
+for k in 1 2; do adb shell input swipe 540 1800 540 700 300; bekle 1; done
+foto ayarlar_alt
+bas "Depolama"; bekle 4; foto depolama
 adb shell input keyevent KEYCODE_BACK; bekle 2
-
-# Büyük oynatıcı ve sıra
-adb shell input tap 451 2001; bekle 12; foto tam_oynatici
-bas "Sıra"; bekle 4; foto sira_ilk
+bas "Çift şarkıları bul"; bekle 3; foto ciftler
+bas "Tamam" || bas "Vazgeç"; bekle 1
+# Beğen sonrası genel arama: "begen" -> Beğendiklerim listesi
+adb shell input swipe 450 2000 450 1500 250; bekle 4; bas "Beğen"; bekle 2; adb shell input keyevent KEYCODE_BACK; bekle 2
+bas "Kütüphane"; bekle 2; bas "Kütüphanede ara"; adb shell input text "begen"; bekle 3; adb shell input keyevent KEYCODE_BACK; bekle 1; foto genel_arama_liste
+bas "Temizle"; bekle 1
+# Kısayol: karışık çal
+adb shell am start -n $PKG/$ACT -a com.subplay.muzik.KISAYOL -d subplay-kisayol://karisik; bekle 6; foto kisayol_karisik
+# Mini oynatıcıyı yukarı kaydır -> büyük oynatıcı (kapak rengi)
+adb shell input swipe 450 2000 450 1500 250; bekle 4; foto tam_oynatici_kapak_rengi
+bas "Beğen"; bekle 2
 adb shell input keyevent KEYCODE_BACK; bekle 2
-for k in 1 2 3 4 5; do bas "Sonraki"; bekle 12; done
-foto bes_sarki_sonra
-bas "Sıra"; bekle 4; foto sira_sonra
-dok; cp $OUT/ui_son.xml $OUT/sira_ui.xml
-adb shell input keyevent KEYCODE_BACK; bekle 2
-
+# Bildirim (♥ ve karıştır düğmeleri)
+adb shell cmd statusbar expand-notifications; bekle 3; foto bildirim_dugmeleri
 kill $LOGPID 2>/dev/null
 grep -E "AndroidRuntime|FATAL|$PKG|SubPlay|yt-dlp|youtubedl" $OUT/logcat.txt | tail -400 > $OUT/logcat_ozet.txt
 exit 0

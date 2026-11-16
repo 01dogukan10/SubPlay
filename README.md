@@ -48,6 +48,18 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - **Uyku zamanlayıcısı:** büyük oynatıcıda ⏾. Belirli bir süre sonra ya da şarkı bitince müzik yavaşça durur.
 - **Kaldığı yerden devam:** uygulama kapansa bile çalan liste, şarkı ve saniye hatırlanır; tekrar açınca ▶'ye basman yeterli. Uygulama da en son açık bıraktığın çalma listesinde, sanatçı ya da albüm sayfasında açılır.
 - **Kütüphanede kaydırma:** aşağı kaydırınca üstteki arama ve düğmeler gizlenir, şarkılara daha çok yer kalır; biraz yukarı kaydırınca geri gelir.
+- **Podcast:** alttaki Podcast sekmesinden adıyla ara (ya da RSS adresini yapıştır) ve abone ol. Her bölüm kaldığın dakikadan devam eder, bitenler "Dinlendi" olarak işaretlenir. Büyük oynatıcıda çalma hızı (0,8x – 2x), 15 sn geri ve 30 sn ileri düğmeleri var. Bölümleri ⬇ ile indirip internetsiz dinleyebilirsin. Yeni bölüm gelince bildirim gelir. Podcast'ler şarkılarınla karışmaz; aboneliklerin yedeğe de girer.
+- **Söz senkronu:** sözler şarkıdan önce ya da sonra gidiyorsa tam ekran sözlerde o an söylenen satıra basılı tut ya da −0,5 / +0,5 sn düğmelerini kullan. Ayar o şarkı için hatırlanır.
+- **Kaydırma hareketleri:** küçük oynatıcıyı sola kaydır → sonraki şarkı, sağa → önceki, yukarı → büyük oynatıcı. Büyük oynatıcıda kapağı sola / sağa kaydırarak da şarkı değiştirebilirsin.
+- **Bluetooth bağlanınca çal:** Ayarlar → Oynatma ve indirme'den açılır. Kulaklık, hoparlör ya da araba bağlanınca kaldığın yerden çalar.
+- **Uygulama simgesi kısayolları:** simgeye basılı tut: "Kaldığın yerden devam", "Karışık çal", "Beğendiklerim".
+- **Bildirimde ♥ ve karıştır:** bildirimden ve kilit ekranından beğenebilir, karışık çalmayı açıp kapatabilirsin.
+- **Geri al:** kütüphaneden kaldırdığın şarkı, listeden çıkardığın şarkı ya da sildiğin liste için alttaki "Geri al"a dokun.
+- **Son çalınanlar:** Listeler sayfasının üstünde son dinlediğin şarkılar ve son açtığın listeler durur. Listeleri ⋮ → "En üste sabitle" ile sabitleyebilirsin.
+- **Genel arama:** kütüphane araması çalma listelerini, podcast'leri ve bölümleri de bulur; Türkçe karakter farkı gözetmez ("begen" yazınca "Beğendiklerim" çıkar).
+- **Kapağa göre renk:** büyük oynatıcının arka planı çalan şarkının kapağının renginde olur.
+- **Depolama ve çift şarkılar:** Ayarlar → Kütüphane'den ne kadar yer kaplandığını görebilir, uzun süredir dinlemediğin indirmeleri silebilir, iki kez eklenmiş şarkıları birleştirebilirsin.
+- **Podcast otomatik indirme / silme:** Ayarlar → Podcast'ten açılır.
 - **Beğen (♥):** beğendiğin şarkılar "Beğendiklerim" listesinde toplanır.
 - **Yumuşak geçiş:** Ayarlar → Oynatma ve indirme. Şarkılar arasında ses yavaşça kısılıp açılır.
 

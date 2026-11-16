@@ -10,7 +10,12 @@ import java.net.URL
 import java.net.URLEncoder
 
 /** Şarkı sözleri. satirlar boş değilse zamanlı (senkronize) sözlerdir. */
-data class Sozler(val satirlar: List<Pair<Long, String>>, val duz: String?, val enstrumantal: Boolean = false) {
+data class Sozler(
+    val satirlar: List<Pair<Long, String>>,
+    val duz: String?,
+    val enstrumantal: Boolean = false,
+    val sureSn: Double = 0.0, // sözlerin ait olduğu kaydın süresi (şarkıyla farkı kaymayı gösterir)
+) {
     val zamanli get() = satirlar.isNotEmpty()
     val bos get() = satirlar.isEmpty() && duz.isNullOrBlank() && !enstrumantal
 }
@@ -55,10 +60,13 @@ object SozKaynagi {
             val arr = runCatching { JSONArray(get(url)) }.getOrNull() ?: continue
             val adaylar = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
             if (adaylar.isEmpty()) continue
-            // Zamanlı sözü olan ve süresi en yakın olanı seç
+            // Süresi şarkıyla neredeyse aynı (±3 sn) ve zamanlı olan en iyisi; süre farkı sözleri kaydırır.
+            // Sonra: zamanlı olup süresi en yakın olan, en son: zamanlı olmayan.
+            fun fark(o: JSONObject) = if (sureSn > 0) kotlin.math.abs(o.optDouble("duration", 0.0) - sureSn) else 0.0
+            fun zamanli(o: JSONObject) = !o.isNull("syncedLyrics") && o.optString("syncedLyrics").isNotBlank()
             val secilen = adaylar.sortedWith(
-                compareBy<JSONObject> { if (it.optString("syncedLyrics").isNullOrBlank() || it.isNull("syncedLyrics")) 1 else 0 }
-                    .thenBy { if (sureSn > 0) kotlin.math.abs(it.optDouble("duration", 0.0) - sureSn) else 0.0 }
+                compareBy<JSONObject> { if (zamanli(it) && fark(it) <= 3.0) 0 else if (zamanli(it)) 1 else 2 }
+                    .thenBy { fark(it) }
             ).first()
             if (sureSn > 0 && kotlin.math.abs(secilen.optDouble("duration", sureSn.toDouble()) - sureSn) > 20) continue
             return secilen
@@ -70,7 +78,7 @@ object SozKaynagi {
         if (o.optBoolean("yok")) return Sozler(emptyList(), null)
         val synced = if (o.isNull("syncedLyrics")) "" else o.optString("syncedLyrics")
         val plain = if (o.isNull("plainLyrics")) null else o.optString("plainLyrics").ifBlank { null }
-        return Sozler(lrc(synced), plain, o.optBoolean("instrumental"))
+        return Sozler(lrc(synced), plain, o.optBoolean("instrumental"), o.optDouble("duration", 0.0))
     }
 
     /** "[01:23.45] metin" satırlarını (ms, metin) listesine çevirir. */

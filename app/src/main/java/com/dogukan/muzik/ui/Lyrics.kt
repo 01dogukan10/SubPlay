@@ -1,5 +1,7 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -98,7 +100,10 @@ fun LyricsScreen(player: PlayerUi, vm: MainViewModel, onClose: () -> Unit) {
                     hata != null -> Mesaj(hata!!)
                     s == null || s.bos -> Mesaj("Bu şarkının sözleri bulunamadı.\n\nŞarkının adı ya da sanatçısı yanlışsa ⋮ → Adını düzenle ile düzeltip ↻'ye basabilirsin.")
                     s.enstrumantal && !s.zamanli && s.duz.isNullOrBlank() -> Mesaj("♪ Enstrümantal şarkı ♪")
-                    s.zamanli -> ZamanliSozler(s, player, vm)
+                    s.zamanli -> Column(Modifier.fillMaxSize()) {
+                        KaymaAyari(s, player, vm)
+                        Box(Modifier.weight(1f)) { ZamanliSozler(s, player, vm) }
+                    }
                     else -> Text(
                         s.duz.orEmpty(),
                         style = MaterialTheme.typography.titleLarge.copy(lineHeight = 34.sp),
@@ -118,11 +123,14 @@ private fun Mesaj(text: String) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ZamanliSozler(s: Sozler, player: PlayerUi, vm: MainViewModel) {
     val c = MaterialTheme.colorScheme
     val state = rememberLazyListState()
-    val aktif = s.satirlar.indexOfLast { it.first <= player.position + 300 }.coerceAtLeast(0)
+    val kaymalar by vm.sozKayma.collectAsState()
+    val kayma = player.currentId?.let { kaymalar[it] } ?: 0L
+    val aktif = s.satirlar.indexOfLast { it.first + kayma <= player.position + 300 }.coerceAtLeast(0)
     LaunchedEffect(aktif) {
         if (!state.isScrollInProgress) state.animateScrollToItem((aktif - 3).coerceAtLeast(0))
     }
@@ -139,7 +147,13 @@ private fun ZamanliSozler(s: Sozler, player: PlayerUi, vm: MainViewModel) {
                     gecti -> c.onBackground.copy(alpha = 0.45f)
                     else -> c.onBackground.copy(alpha = 0.8f)
                 },
-                modifier = Modifier.fillMaxWidth().clickable { vm.seekTo(ms) }.padding(horizontal = 24.dp, vertical = 10.dp),
+                // Dokun: şarkı o satıra gider. Basılı tut: "bu satır şimdi söyleniyor" -> sözler buna göre kayar
+                modifier = Modifier.fillMaxWidth()
+                    .combinedClickable(
+                        onClick = { vm.seekTo((ms + kayma).coerceAtLeast(0L)) },
+                        onLongClick = { player.currentId?.let { vm.setSozKayma(it, player.position - ms) } },
+                    )
+                    .padding(horizontal = 24.dp, vertical = 10.dp),
             )
         }
         item { Spacer(Modifier.height(240.dp)) }
@@ -180,7 +194,9 @@ fun SozKutusu(player: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
                 color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
             )
             s.zamanli -> {
-                val aktif = s.satirlar.indexOfLast { it.first <= player.position + 300 }.coerceAtLeast(0)
+                val kaymalar by vm.sozKayma.collectAsState()
+                val kayma = id?.let { kaymalar[it] } ?: 0L
+                val aktif = s.satirlar.indexOfLast { it.first + kayma <= player.position + 300 }.coerceAtLeast(0)
                 val state = rememberLazyListState()
                 LaunchedEffect(aktif, id) { state.animateScrollToItem((aktif - 1).coerceAtLeast(0)) }
                 LazyColumn(
@@ -223,5 +239,34 @@ fun SozKutusu(player: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
+    }
+}
+
+/** Sözler şarkıdan önce/sonra gidiyorsa: yarım saniyelik adımlarla kaydır ya da sıfırla. */
+@Composable
+private fun KaymaAyari(s: Sozler, player: PlayerUi, vm: MainViewModel) {
+    val c = MaterialTheme.colorScheme
+    val id = player.currentId ?: return
+    val kaymalar by vm.sozKayma.collectAsState()
+    val kayma = kaymalar[id] ?: 0L
+    val sureFarki = if (s.sureSn > 0 && player.duration > 0) player.duration / 1000.0 - s.sureSn else 0.0
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (kayma == 0L) "Senkron" else "Senkron: " + (if (kayma > 0) "+" else "") + String.format(java.util.Locale.US, "%.1f sn", kayma / 1000.0),
+                style = MaterialTheme.typography.labelLarge, color = if (kayma == 0L) c.onSurfaceVariant else c.primary,
+                modifier = Modifier.weight(1f),
+            )
+            androidx.compose.material3.TextButton(onClick = { vm.setSozKayma(id, kayma - 500) }) { Text("− 0,5 sn") }
+            androidx.compose.material3.TextButton(onClick = { vm.setSozKayma(id, kayma + 500) }) { Text("+ 0,5 sn") }
+            if (kayma != 0L) androidx.compose.material3.TextButton(onClick = { vm.setSozKayma(id, 0) }) { Text("Sıfırla") }
+        }
+        Text(
+            if (kotlin.math.abs(sureFarki) > 3 && kayma == 0L)
+                "Bu şarkının süresi sözlerin ait olduğu kayıttan ${kotlin.math.abs(sureFarki).toInt()} sn farklı, sözler kayabilir. " +
+                    "Söylenen satıra basılı tutarak sözleri şarkıya denk getirebilirsin."
+            else "Sözler kayıyorsa o an söylenen satıra basılı tut.",
+            style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
+        )
     }
 }

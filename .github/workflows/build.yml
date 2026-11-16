@@ -26,8 +26,8 @@ jobs:
           else
             echo "UYARI: KEYSTORE_B64 secret'ı yok, geçici anahtarla imzalanıyor (güncelleme üstüne kurulmaz)."
           fi
-      - run: gradle assembleDebug --no-daemon
-      - run: cp app/build/outputs/apk/debug/*.apk subplay.apk
+      - run: gradle assembleRelease --no-daemon
+      - run: cp app/build/outputs/apk/release/*.apk subplay.apk
       - uses: actions/upload-artifact@v4
         with:
           name: SubPlay-apk

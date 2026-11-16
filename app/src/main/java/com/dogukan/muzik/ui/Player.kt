@@ -1,5 +1,9 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.AutoAwesome
 import android.os.Build
 import androidx.compose.foundation.background
@@ -80,6 +84,10 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val neon = LocalNeon.current
     val shape = RoundedCornerShape(16.dp)
+    // Kaydırma: sola -> sonraki, sağa -> önceki, yukarı -> büyük oynatıcı
+    val esik = with(androidx.compose.ui.platform.LocalDensity.current) { 72.dp.toPx() }
+    var kayX by remember { mutableFloatStateOf(0f) }
+    val gorunenX by androidx.compose.animation.core.animateFloatAsState(kayX, label = "mini")
     Surface(
         color = if (neon) c.surface.copy(alpha = 0.92f) else c.surfaceContainerHigh,
         shape = shape,
@@ -87,9 +95,27 @@ fun MiniPlayer(ui: PlayerUi, vm: MainViewModel, onOpen: () -> Unit) {
             .padding(horizontal = 8.dp, vertical = 6.dp)
             .then(if (neon) Modifier.border(1.dp, neonKenar(), shape) else Modifier)
             .clip(shape)
+            .pointerInput(Unit) {
+                var dx = 0f; var dy = 0f
+                detectDragGestures(
+                    onDragStart = { dx = 0f; dy = 0f },
+                    onDragEnd = {
+                        when {
+                            kotlin.math.abs(dx) > kotlin.math.abs(dy) && dx < -esik -> vm.next()
+                            kotlin.math.abs(dx) > kotlin.math.abs(dy) && dx > esik -> vm.previous()
+                            dy < -esik / 2 -> onOpen()
+                        }
+                        dx = 0f; dy = 0f; kayX = 0f
+                    },
+                    onDragCancel = { dx = 0f; dy = 0f; kayX = 0f },
+                ) { ch, d ->
+                    ch.consume(); dx += d.x; dy += d.y
+                    kayX = if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) dx * 0.6f else 0f
+                }
+            }
             .clickable(onClick = onOpen),
     ) {
-        Column {
+        Column(Modifier.graphicsLayer { translationX = gorunenX; alpha = 1f - (kotlin.math.abs(gorunenX) / (esik * 4)).coerceAtMost(0.5f) }) {
             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Kapak(ui.artwork, Modifier.size(46.dp), corner = 10.dp)
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
@@ -140,6 +166,26 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
                 ) { _, dy -> swipe = (swipe + dy).coerceAtLeast(0f) }
             },
     ) {
+        // Kapaktan renk: arka plan geçişi çalan şarkının kapağının renginde olur
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        var kapakRengi by remember { mutableStateOf<Color?>(null) }
+        LaunchedEffect(ui.artwork) {
+            kapakRengi = ui.artwork?.let { uri ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        val req = coil.request.ImageRequest.Builder(ctx).data(uri).allowHardware(false).size(96).build()
+                        val bmp = (coil.Coil.imageLoader(ctx).execute(req) as? coil.request.SuccessResult)?.drawable
+                            ?.let { (it as? android.graphics.drawable.BitmapDrawable)?.bitmap }
+                        bmp?.let { b ->
+                            val p = androidx.palette.graphics.Palette.from(b).generate()
+                            val r = p.getVibrantColor(p.getMutedColor(p.getDominantColor(0)))
+                            if (r != 0) Color(r) else null
+                        }
+                    }.getOrNull()
+                }
+            }
+        }
+        val anaRenk by androidx.compose.animation.animateColorAsState(kapakRengi ?: c.primary, label = "kapakRengi")
         // Arka plan: bulanık kapak (Android 12+) + renk geçişi
         if (ui.artwork != null && Build.VERSION.SDK_INT >= 31) {
             AsyncImage(
@@ -151,7 +197,7 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
                     listOf(
-                        c.primary.copy(alpha = if (neon) 0.40f else 0.20f),
+                        anaRenk.copy(alpha = if (neon) 0.45f else if (kapakRengi != null) 0.38f else 0.20f),
                         Color.Transparent,
                         c.background.copy(alpha = 0.85f),
                         c.background,
@@ -174,7 +220,7 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
                     Text("ŞİMDİ ÇALIYOR", style = MaterialTheme.typography.labelMedium, letterSpacing = 2.sp,
                         color = c.onSurfaceVariant)
                     Spacer(Modifier.weight(1f))
-                    UykuDugmesi(ekstra)
+                    UykuDugmesi(ekstra, ui.podcast)
                     IconButton(onClick = onOpenQueue) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, "Sıra")
                     }
@@ -187,7 +233,7 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
                         horizontalArrangement = Arrangement.spacedBy(28.dp),
                     ) {
                         Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.Center) {
-                            CoverArt(ui, neon)
+                            CoverArt(ui, neon, vm)
                         }
                         Column(Modifier.weight(1.3f)) { InfoAndControls(ui, vm, ekstra, kutu = false) }
                     }
@@ -195,7 +241,7 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
                     Box(
                         Modifier.weight(1f).fillMaxWidth().padding(vertical = 24.dp),
                         contentAlignment = Alignment.Center,
-                    ) { CoverArt(ui, neon) }
+                    ) { CoverArt(ui, neon, vm) }
                     InfoAndControls(ui, vm, ekstra)
                     Spacer(Modifier.height(36.dp))
                 }
@@ -205,14 +251,31 @@ private fun FullPlayerIc(ui: PlayerUi, vm: MainViewModel, onClose: () -> Unit, o
     }
 }
 
-/** Ekrana sığacak en büyük kare kapak. */
+/** Ekrana sığacak en büyük kare kapak. Sola / sağa kaydırınca şarkı değişir. */
 @Composable
-private fun CoverArt(ui: PlayerUi, neon: Boolean) {
+private fun CoverArt(ui: PlayerUi, neon: Boolean, vm: MainViewModel? = null) {
     val c = MaterialTheme.colorScheme
     val coverShape = RoundedCornerShape(24.dp)
+    val esik = with(androidx.compose.ui.platform.LocalDensity.current) { 90.dp.toPx() }
+    var kayX by remember { mutableFloatStateOf(0f) }
+    val gorunenX by androidx.compose.animation.core.animateFloatAsState(kayX, label = "kapak")
     Kapak(
         ui.artwork,
         Modifier
+            .then(if (vm == null || ui.podcast) Modifier else Modifier.pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (kayX < -esik) vm.next() else if (kayX > esik) vm.previous()
+                        kayX = 0f
+                    },
+                    onDragCancel = { kayX = 0f },
+                ) { ch, d -> ch.consume(); kayX += d }
+            })
+            .graphicsLayer {
+                translationX = gorunenX * 0.7f
+                rotationZ = gorunenX / 60f
+                alpha = 1f - (kotlin.math.abs(gorunenX) / (esik * 4)).coerceAtMost(0.4f)
+            }
             .aspectRatio(1f, matchHeightConstraintsFirst = true)
             .shadow(
                 elevation = if (neon) 36.dp else 18.dp, shape = coverShape,
@@ -247,8 +310,8 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clickable(onClick = ekstra.onArtist))
             }
         }
-        // ♥ Beğen
-        IconButton(onClick = ekstra.onLike) {
+        // ♥ Beğen (podcast bölümlerinde yok)
+        if (!ui.podcast) IconButton(onClick = ekstra.onLike) {
             Icon(
                 if (ekstra.liked) Icons.Default.Favorite
                 else Icons.Default.FavoriteBorder,
@@ -284,9 +347,15 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val off = c.onSurfaceVariant
+        if (ui.podcast) {
+            // Podcast: hız, 15 sn geri, çal, 30 sn ileri
+            HizDugmesi(ui.hiz, vm::hizAyarla)
+            AtlaDugmesi(-15) { vm.atla(-15_000) }
+        } else {
         IconButton(onClick = vm::toggleShuffle) { KarisikIkon(ui.shuffle) }
         IconButton(onClick = vm::previous, modifier = Modifier.size(56.dp)) {
             Icon(Icons.Default.SkipPrevious, "Önceki", modifier = Modifier.size(40.dp))
+        }
         }
         FilledIconButton(
             onClick = vm::togglePlay,
@@ -299,6 +368,10 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
             Icon(if (ui.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 if (ui.isPlaying) "Duraklat" else "Çal", modifier = Modifier.size(40.dp))
         }
+        if (ui.podcast) {
+            AtlaDugmesi(30) { vm.atla(30_000) }
+            Spacer(Modifier.size(48.dp))
+        } else {
         IconButton(onClick = vm::next, modifier = Modifier.size(56.dp)) {
             Icon(Icons.Default.SkipNext, "Sonraki", modifier = Modifier.size(40.dp))
         }
@@ -308,10 +381,13 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
                 "Tekrar", tint = if (ui.repeat == Player.REPEAT_MODE_OFF) off else c.primary,
             )
         }
+        }
     }
 
     // Şarkı sözleri: küçük kutuda kendiliğinden görünür; dokununca tam ekran açılır
-    if (kutu) {
+    if (ui.podcast) {
+        // Podcast: söz yok
+    } else if (kutu) {
         Spacer(Modifier.height(12.dp))
         SozKutusu(ui, vm, ekstra.onLyrics)
     } else {
@@ -338,12 +414,12 @@ class OynaticiEkstra(
 
 /** ⏾ Uyku zamanlayıcısı: süre seç; açıkken kalan süre görünür. */
 @Composable
-private fun UykuDugmesi(e: OynaticiEkstra) {
+private fun UykuDugmesi(e: OynaticiEkstra, podcast: Boolean = false) {
     val c = MaterialTheme.colorScheme
     var open by remember { mutableStateOf(false) }
     Box {
         if (e.uyku != null) {
-            val kalan = if (e.uyku == -1L) "şarkı sonu" else "${((e.uyku - System.currentTimeMillis()) / 60_000L + 1).coerceAtLeast(1)} dk"
+            val kalan = if (e.uyku == -1L) (if (podcast) "bölüm sonu" else "şarkı sonu") else "${((e.uyku - System.currentTimeMillis()) / 60_000L + 1).coerceAtLeast(1)} dk"
             androidx.compose.material3.TextButton(onClick = { open = true }) {
                 Icon(Icons.Default.Bedtime, null, tint = c.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(4.dp))
@@ -360,7 +436,7 @@ private fun UykuDugmesi(e: OynaticiEkstra) {
             listOf(5, 15, 30, 45, 60, 90).forEach { dk ->
                 androidx.compose.material3.DropdownMenuItem(text = { Text("$dk dakika") }, onClick = { open = false; e.onSleep(dk) })
             }
-            androidx.compose.material3.DropdownMenuItem(text = { Text("Bu şarkı bitince") }, onClick = { open = false; e.onSleep(-1) })
+            androidx.compose.material3.DropdownMenuItem(text = { Text(if (podcast) "Bu bölüm bitince" else "Bu şarkı bitince") }, onClick = { open = false; e.onSleep(-1) })
             if (e.uyku != null) {
                 androidx.compose.material3.DropdownMenuItem(
                     text = { Text("Kapat", color = c.error) }, onClick = { open = false; e.onSleep(0) })

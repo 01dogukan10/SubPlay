@@ -46,6 +46,8 @@ data class PlayerUi(
     val shuffle: Boolean = false,
     val akilli: Boolean = false, // akıllı karıştırma (öneri ekleyen)
     val oneri: Boolean = false,  // çalan şarkı akıllı karıştırmanın önerisi
+    val podcast: Boolean = false, // çalan bir podcast bölümü
+    val hiz: Float = 1f,
     val repeat: Int = Player.REPEAT_MODE_OFF,
 )
 
@@ -57,6 +59,10 @@ data class UpdateUi(
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+    companion object {
+        /** Uygulama simgesi kısayolundan gelen istek (oynatıcı bağlanınca işlenir). */
+        val bekleyenKisayol = MutableStateFlow<String?>(null)
+    }
 
     val repo = MusicRepository.get(app)
 
@@ -124,6 +130,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         Guncelle.zamanla(app)
+        com.dogukan.muzik.data.PodcastIsci.zamanla(app)
         repo.esitleGerekirse()
         checkUpdate(manual = false)
         future.addListener({
@@ -132,6 +139,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             kaldigiYerdenYukle()
             refresh()
             refreshSira()
+            viewModelScope.launch { bekleyenKisayol.collect { k -> if (k != null) { bekleyenKisayol.value = null; kisayol(k) } } }
         }, ContextCompat.getMainExecutor(app))
 
         // Çalarken ilerleme çubuğunu güncelle
@@ -224,6 +232,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         com.dogukan.muzik.data.SozKaynagi.getir(getApplication(), t, (sureMs / 1000).toInt())
     }
 
+    // Sözlerin şarkıya göre kayması (ms, şarkı başına). Artı: sözler daha geç gelir.
+    private val kaymaPref = app.getSharedPreferences("soz_kayma", android.content.Context.MODE_PRIVATE)
+    private val _sozKayma = MutableStateFlow(kaymaPref.all.mapNotNull { (k, v) -> (v as? Long)?.let { k to it } }.toMap())
+    val sozKayma = _sozKayma.asStateFlow()
+    fun setSozKayma(trackId: String, ms: Long) {
+        val v = ms.coerceIn(-60_000L, 60_000L)
+        if (v == 0L) kaymaPref.edit().remove(trackId).apply() else kaymaPref.edit().putLong(trackId, v).apply()
+        _sozKayma.value = if (v == 0L) _sozKayma.value - trackId else _sozKayma.value + (trackId to v)
+    }
+
     fun sozleriYenile(trackId: String) = com.dogukan.muzik.data.SozKaynagi.sil(getApplication(), trackId)
 
     /** Sıradaki bir şarkıya atla. */
@@ -236,7 +254,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val c = controller ?: return
         if (c.mediaItemCount > 0) return
         val k = com.dogukan.muzik.player.KayitliKuyruk.oku(getApplication(), repo) ?: return
-        c.setMediaItems(k.sarkilar.mapIndexed { i, t -> t.toMediaItem(k.kuyrukta[i]) }, k.index, k.konum)
+        c.setMediaItems(k.ogeler, k.index, k.konum)
         komut(SiraKomut.YENI_KUYRUK)
         c.prepare() // çalmaya başlatma; kullanıcı ▶'ye basınca kaldığı yerden devam eder
         if (c.shuffleModeEnabled && _akilli.value) onerileriGetir()
@@ -248,6 +266,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = PlayerUi(
             currentId = item?.mediaId,
             oneri = item?.mediaId?.startsWith("oneri:") == true,
+            podcast = MedyaOge.podcastMi(item?.mediaId),
+            hiz = c.playbackParameters.speed,
             title = item?.let { c.mediaMetadata.title?.toString() ?: it.mediaMetadata.title?.toString() ?: "" },
             artist = c.mediaMetadata.artist?.toString().orEmpty(),
             artwork = c.mediaMetadata.artworkUri,
@@ -276,6 +296,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         c.prepare()
         c.play()
         if (c.shuffleModeEnabled && _akilli.value) onerileriGetir()
+    }
+
+    // ---------------- Podcast ----------------
+    val pod = com.dogukan.muzik.data.PodcastRepo.get(app)
+
+    /** Bölümü kaldığı yerden çal. */
+    fun bolumCal(b: com.dogukan.muzik.data.Bolum) {
+        val c = controller ?: return
+        val baslangic = if (b.dinlendi) 0L else b.konumMs
+        c.setMediaItems(listOf(MedyaOge.bolum(pod, b)), 0, baslangic)
+        c.prepare(); c.play()
+        refresh()
+    }
+
+    /** Çalma hızı (sadece podcast'lerde geçerli, hatırlanır). */
+    fun hizAyarla(h: Float) {
+        pod.hiz = h
+        controller?.let { c -> if (MedyaOge.podcastMi(c.currentMediaItem?.mediaId)) c.setPlaybackSpeed(h) }
+        refresh()
+    }
+
+    fun atla(ms: Long) {
+        controller?.let { c -> c.seekTo((c.currentPosition + ms).coerceIn(0L, c.duration.takeIf { it > 0 } ?: Long.MAX_VALUE)) }
+        refresh()
     }
 
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
@@ -312,19 +356,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** ♥: çalan şarkı öneriyse önce kütüphaneye ekler. Beğenildiyse true. */
     fun begenCalani(): Boolean? {
-        val c = controller ?: return null
-        val item = c.currentMediaItem ?: return null
-        val oneri = item.mediaId.startsWith("oneri:")
-        val vid = item.mediaId.removePrefix("oneri:")
-        val id = if (oneri) {
-            repo.oneriyiEkle(com.dogukan.muzik.data.Oneri(vid,
-                item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty()))
-        } else item.mediaId
-        val begenildi = repo.toggleLike(id)
-        // Beğenilen öneri kütüphaneye indirilmiş olarak kaydedilir (önbellekteki dosyayla)
-        if (oneri && begenildi) repo.oneriyiKaydet(id, vid)
-        return begenildi
+        val item = controller?.currentMediaItem ?: return null
+        return repo.begen(item.mediaId, item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty())
     }
+
     fun cycleRepeat() {
         controller?.let {
             it.repeatMode = when (it.repeatMode) {
@@ -348,6 +383,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteTracks(list: List<Track>) = list.forEach { deleteTrack(it) }
+
+    private fun kisayol(k: String) {
+        val c = controller ?: return
+        when (k) {
+            "karisik" -> repo.tracks.value.takeIf { it.isNotEmpty() }?.let { l -> playTracks(l, l.indices.random(), shuffle = true) }
+            "begeni" -> {
+                val byId = repo.tracks.value.associateBy { it.id }
+                val l = repo.playlists.value.find { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }
+                    ?.trackIds?.mapNotNull { byId[it] }.orEmpty()
+                if (l.isNotEmpty()) playTracks(l, 0, null) else repo.notice("Henüz beğendiğin şarkı yok")
+            }
+            else -> if (c.mediaItemCount > 0) { c.prepare(); c.play() }
+        }
+    }
+
+    /** Kütüphaneden kaldır (çalma sırasından da); geri alma işlevini döndürür. */
+    fun kaldir(list: List<Track>): () -> Unit {
+        val ids = list.map { it.id }.toSet()
+        controller?.let { c -> for (i in c.mediaItemCount - 1 downTo 0) if (c.getMediaItemAt(i).mediaId in ids) c.removeMediaItem(i) }
+        return repo.kaldirGeriAlinabilir(list)
+    }
 
     /** Sadece telefondaki dosyaları sil; şarkılar kütüphanede kalır ve internetten çalınır. */
     fun deleteFiles(list: List<Track>) {

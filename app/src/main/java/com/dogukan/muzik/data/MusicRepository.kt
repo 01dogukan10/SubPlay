@@ -840,6 +840,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                     .put("tarih", System.currentTimeMillis())
                     .put("kutuphane", JSONArray(libFile.takeIf { it.exists() }?.readText() ?: "[]"))
                     .put("listeler", JSONArray(plFile.takeIf { it.exists() }?.readText() ?: "[]"))
+                    .put("podcastlar", PodcastRepo.get(ctx).yedekJson())
                 dir.findFile("yedek.json")?.delete()
                 val jf = dir.createFile("application/octet-stream", "yedek.json") ?: throw IOException("yedek.json yazılamadı")
                 ctx.contentResolver.openOutputStream(jf.uri)!!.use { it.write(json.toString().toByteArray()) }
@@ -872,6 +873,7 @@ class MusicRepository private constructor(private val ctx: Context) {
                     ctx.contentResolver.openInputStream(src.uri)!!.use { i -> dst.outputStream().use { o -> i.copyTo(o) } }
                 }
 
+                json.optJSONArray("podcastlar")?.let { PodcastRepo.get(ctx).yedektenYukle(it) }
                 val lib = json.optJSONArray("kutuphane") ?: JSONArray()
                 val haveIds = _tracks.value.map { it.id }.toSet()
                 val added = mutableListOf<Track>()
@@ -1729,5 +1731,204 @@ class MusicRepository private constructor(private val ctx: Context) {
                 .put("cover", p.cover ?: "").put("kaynak", p.kaynak ?: ""))
         }
         plFile.writeText(arr.toString())
+    }
+
+    // ================= Konfor özellikleri =================
+
+    /** Listelerde kapak: diske bakmadan (eksikse Coil boş gösterir). Kaydırmayı hızlandırır. */
+    fun kapakDosyasi(t: Track): File? = t.cover?.let { File(coversDir, it) }
+
+    /** Şarkıyı (ya da akıllı karıştırma önerisini) beğen / vazgeç. Podcast için null. */
+    fun begen(mediaId: String, title: String, artist: String): Boolean? {
+        if (mediaId.startsWith(PodcastRepo.ON_EK)) return null
+        val oneri = mediaId.startsWith("oneri:")
+        val vid = mediaId.removePrefix("oneri:")
+        val id = if (oneri) oneriyiEkle(Oneri(vid, title, artist)) else mediaId
+        val b = toggleLike(id)
+        if (oneri && b) oneriyiKaydet(id, vid)
+        return b
+    }
+
+    fun begenildiMi(mediaId: String?): Boolean {
+        if (mediaId == null) return false
+        val liked = _playlists.value.find { it.id == BEGENI_ID }?.trackIds?.toSet() ?: return false
+        if (mediaId.startsWith("oneri:")) {
+            val vid = mediaId.removePrefix("oneri:")
+            return _tracks.value.any { it.videoId == vid && it.id in liked }
+        }
+        return mediaId in liked
+    }
+
+    // ---- Geri alınabilir kaldırma: dosyalar birkaç saniye sonra silinir, "Geri al" her şeyi döndürür ----
+    private val bekleyenSilmeler = ConcurrentHashMap<Long, kotlinx.coroutines.Job>()
+    private var silmeNo = 0L
+
+    /** Şarkıları kütüphaneden kaldırır; geri alma işlevini döndürür. */
+    fun kaldirGeriAlinabilir(list: List<Track>): () -> Unit = synchronized(lock) {
+        val ids = list.map { it.id }.toSet()
+        val uyelik = _playlists.value.associate { pl ->
+            pl.id to pl.trackIds.withIndex().filter { it.value in ids }.map { it.index to it.value }
+        }.filterValues { it.isNotEmpty() }
+        _tracks.value = _tracks.value.filterNot { it.id in ids }
+        _playlists.value = _playlists.value.map { pl -> pl.copy(trackIds = pl.trackIds.filterNot { it in ids }) }
+        saveTracks(); savePlaylists()
+        val no = ++silmeNo
+        bekleyenSilmeler[no] = scope.launch {
+            kotlinx.coroutines.delay(8000)
+            list.forEach { t -> fileOf(t).delete(); t.cover?.let { File(coversDir, it).delete() } }
+            bekleyenSilmeler.remove(no)
+        }
+        return@synchronized {
+            synchronized(lock) {
+                bekleyenSilmeler.remove(no)?.cancel()
+                val var_ = _tracks.value.map { it.id }.toSet()
+                _tracks.value = (_tracks.value + list.filter { it.id !in var_ }).sortedByDescending { it.addedAt }
+                _playlists.value = _playlists.value.map { pl ->
+                    val u = uyelik[pl.id] ?: return@map pl
+                    val l = pl.trackIds.toMutableList()
+                    u.sortedBy { it.first }.forEach { (i, id) -> if (id !in l) l.add(i.coerceAtMost(l.size), id) }
+                    pl.copy(trackIds = l)
+                }
+                saveTracks(); savePlaylists()
+            }
+        }
+    }
+
+    /** Listeyi siler; geri alma işlevini döndürür. */
+    fun listeSilGeriAlinabilir(id: String): () -> Unit = synchronized(lock) {
+        val idx = _playlists.value.indexOfFirst { it.id == id }
+        if (idx < 0) return@synchronized {}
+        val pl = _playlists.value[idx]
+        _playlists.value = _playlists.value.filterNot { it.id == id }
+        savePlaylists()
+        val no = ++silmeNo
+        bekleyenSilmeler[no] = scope.launch {
+            kotlinx.coroutines.delay(8000)
+            pl.cover?.let { File(coversDir, it).delete() }
+            bekleyenSilmeler.remove(no)
+        }
+        return@synchronized {
+            synchronized(lock) {
+                bekleyenSilmeler.remove(no)?.cancel()
+                if (_playlists.value.none { it.id == id }) {
+                    val l = _playlists.value.toMutableList(); l.add(idx.coerceAtMost(l.size), pl)
+                    _playlists.value = l; savePlaylists()
+                }
+            }
+        }
+    }
+
+    /** Şarkıları listeden çıkarır; geri alma işlevini döndürür. */
+    fun listedenCikarGeriAlinabilir(playlistId: String, trackIds: Collection<String>): () -> Unit = synchronized(lock) {
+        val pl = _playlists.value.find { it.id == playlistId } ?: return@synchronized {}
+        val eski = pl.trackIds
+        _playlists.value = _playlists.value.map { if (it.id == playlistId) it.copy(trackIds = it.trackIds.filterNot { t -> t in trackIds }) else it }
+        savePlaylists()
+        return@synchronized {
+            synchronized(lock) {
+                _playlists.value = _playlists.value.map { p ->
+                    if (p.id != playlistId) p
+                    else {
+                        // Bu arada eklenenleri koru, çıkarılanları eski yerlerine koy
+                        val sonradan = p.trackIds.filter { it !in eski }
+                        p.copy(trackIds = eski.filter { it in p.trackIds || it in trackIds } + sonradan)
+                    }
+                }
+                savePlaylists()
+            }
+        }
+    }
+
+    // ---- Sabit listeler ve son açılan listeler ----
+    private val _sabitler = MutableStateFlow(prefs.getStringSet("sabit_listeler", emptySet())!!.toSet())
+    val sabitler = _sabitler.asStateFlow()
+    fun sabitle(id: String, on: Boolean) {
+        _sabitler.value = if (on) _sabitler.value + id else _sabitler.value - id
+        prefs.edit().putStringSet("sabit_listeler", _sabitler.value).apply()
+    }
+
+    private val _sonListeler = MutableStateFlow(prefs.getString("son_listeler", "")!!.split(',').filter { it.isNotBlank() })
+    val sonListeler = _sonListeler.asStateFlow()
+    fun listeAcildi(id: String) {
+        val l = (listOf(id) + (_sonListeler.value - id)).take(8)
+        if (l == _sonListeler.value) return
+        _sonListeler.value = l
+        prefs.edit().putString("son_listeler", l.joinToString(",")).apply()
+    }
+
+    // ---- Çift şarkılar ----
+    private fun ciftAnahtar(t: Track): String {
+        fun temiz(x: String) = x.lowercase(java.util.Locale("tr"))
+            .replace(Regex("\\s*[(\\[].*?[)\\]]"), "")
+            .replace(Regex("official|video|audio|lyrics?|music|hd|4k|remaster(ed)?"), "")
+            .filter { it.isLetterOrDigit() }
+        return temiz(t.title) + "|" + temiz(anaSanatci(t.artist))
+    }
+
+    /** Aynı şarkının birden çok kaydı (aynı YouTube kimliği ya da aynı ad + sanatçı). */
+    fun ciftler(): List<List<Track>> {
+        val lib = _tracks.value
+        val ebeveyn = HashMap<String, String>()
+        fun bul(x: String): String { var r = x; while (ebeveyn[r] != null && ebeveyn[r] != r) r = ebeveyn[r]!!; return r }
+        fun birles(a: String, b: String) { val ra = bul(a); val rb = bul(b); if (ra != rb) ebeveyn[ra] = rb }
+        lib.forEach { ebeveyn[it.id] = it.id }
+        lib.groupBy { it.videoId ?: ytId(it.sourceUrl) }.forEach { (k, l) -> if (k != null && l.size > 1) l.zipWithNext { a, b -> birles(a.id, b.id) } }
+        lib.groupBy { ciftAnahtar(it) }.forEach { (k, l) -> if (k.length > 3 && l.size > 1) l.zipWithNext { a, b -> birles(a.id, b.id) } }
+        return lib.groupBy { bul(it.id) }.values.filter { it.size > 1 }
+    }
+
+    /** Her gruptan en iyisini (indirilmiş, kapaklı, en eski) tutar; listelerdeki yerini ve beğenisini korur. */
+    fun ciftleriBirlestir(gruplar: List<List<Track>>): Int = synchronized(lock) {
+        var silinen = 0
+        val idDegis = HashMap<String, String>()
+        val silinecekDosyalar = ArrayList<File>()
+        var tracks = _tracks.value
+        for (g in gruplar) {
+            val guncel = g.mapNotNull { t -> tracks.find { it.id == t.id } }
+            if (guncel.size < 2) continue
+            var tut = guncel.sortedWith(compareByDescending<Track> { if (it.indirildi && fileOf(it).exists()) 1 else 0 }
+                .thenByDescending { if (it.cover != null) 1 else 0 }.thenBy { it.addedAt }).first()
+            val digerleri = guncel - tut
+            if (!tut.indirildi) digerleri.firstOrNull { it.indirildi && fileOf(it).exists() }?.let { d -> tut = tut.copy(fileName = d.fileName) }
+            if (tut.cover == null) digerleri.firstOrNull { it.cover != null }?.let { d -> tut = tut.copy(cover = d.cover) }
+            if (tut.album == null) tut = tut.copy(album = digerleri.firstNotNullOfOrNull { it.album })
+            digerleri.forEach { d ->
+                idDegis[d.id] = tut.id
+                if (d.fileName.isNotBlank() && d.fileName != tut.fileName) silinecekDosyalar += File(musicDir, d.fileName)
+                if (d.cover != null && d.cover != tut.cover) silinecekDosyalar += File(coversDir, d.cover)
+            }
+            val sabit = tut
+            tracks = tracks.filterNot { t -> digerleri.any { it.id == t.id } }.map { if (it.id == sabit.id) sabit else it }
+            silinen += digerleri.size
+        }
+        _tracks.value = tracks
+        _playlists.value = _playlists.value.map { pl -> pl.copy(trackIds = pl.trackIds.map { idDegis[it] ?: it }.distinct()) }
+        saveTracks(); savePlaylists()
+        silinecekDosyalar.forEach { it.delete() }
+        silinen
+    }
+
+    // ---- Depolama ----
+    data class Depolama(val sarkiBayt: Long, val indirilen: Int, val podcastBayt: Long, val onbellekBayt: Long, val kapakBayt: Long)
+
+    private fun boyut(f: File): Long = if (f.isFile) f.length() else f.listFiles()?.sumOf { boyut(it) } ?: 0L
+
+    suspend fun depolama(): Depolama = withContext(Dispatchers.IO) {
+        Depolama(boyut(musicDir), _tracks.value.count { it.indirildi }, boyut(PodcastRepo.get(ctx).klasor),
+            boyut(ctx.cacheDir), boyut(coversDir))
+    }
+
+    /** "gun" gündür dinlenmemiş (ya da hiç dinlenmemiş ve o kadar önce eklenmiş) indirmeler ve boyutları. */
+    suspend fun dinlenmeyenIndirmeler(gun: Int): List<Pair<Track, Long>> = withContext(Dispatchers.IO) {
+        val son = Istatistik.get(ctx).sonDinleme()
+        val sinir = System.currentTimeMillis() - gun * 86_400_000L
+        _tracks.value.filter { it.indirildi && (son[it.id] ?: it.addedAt) < sinir }
+            .mapNotNull { t -> fileOf(t).takeIf { it.exists() }?.let { t to it.length() } }
+            .sortedByDescending { it.second }
+    }
+
+    /** Geçici dosyaları (kapak önbelleği, inmiş güncellemeler) temizle. Öneri önbelleği çalarken korunur. */
+    suspend fun onbellegiTemizle() = withContext(Dispatchers.IO) {
+        ctx.cacheDir.listFiles()?.forEach { if (it.name != "oneri") it.deleteRecursively() }
     }
 }

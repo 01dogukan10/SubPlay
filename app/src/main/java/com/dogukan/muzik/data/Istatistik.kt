@@ -56,6 +56,11 @@ class Istatistik private constructor(ctx: Context) {
     private fun kopya(): List<Dinleme> = synchronized(lock) { olaylar.toList() }
 
     fun dinlemeSayilari(): Map<String, Int> = kopya().groupingBy { it.trackId }.eachCount()
+    /** En son dinlenen farklı şarkıların kimlikleri (yeniden eskiye). */
+    fun sonCalinanlar(limit: Int = 20): List<String> =
+        kopya().asReversed().asSequence().map { it.trackId }.filter { !it.startsWith("oneri:") && !it.startsWith("pod:") }
+            .distinct().take(limit).toList()
+
     fun sonDinleme(): Map<String, Long> = kopya().groupBy { it.trackId }.mapValues { (_, l) -> l.maxOf { it.zaman } }
 
     /** Akıllı liste: en çok dinlenenler. */

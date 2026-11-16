@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Bluetooth cihaz bağlanınca otomatik çalma (Ayarlar'dan açılır) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -19,6 +22,11 @@
         android:usesCleartextTraffic="true">
 
         <!-- Kapak resimleri: bildirim / kilit ekranı / Bluetooth / Android Auto okuyabilsin (sadece okunur) -->
+        <receiver android:name="com.dogukan.muzik.player.BluetoothAlici" android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name="com.dogukan.muzik.player.KapakSaglayici"
             android:authorities="${applicationId}.kapak"
@@ -61,6 +69,12 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="com.subplay.muzik.KISAYOL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="subplay-kisayol" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/kisayollar" />
         </activity>
 
         <!-- Android Auto: SubPlay bir medya uygulamasıdır -->

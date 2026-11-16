@@ -1,5 +1,11 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -124,9 +130,17 @@ import java.util.Locale
 
 private val TR = Locale("tr")
 
+/** Arama anahtarı: büyük/küçük harf ve Türkçe karakter farkı gözetmez (ğ=g, ş=s, ı=i, ö=o, ü=u, ç=c). */
+fun ara(s: String): String = s.lowercase(Locale("tr")).map {
+    when (it) { 'ğ' -> 'g'; 'ş' -> 's'; 'ı' -> 'i'; 'ö' -> 'o'; 'ü' -> 'u'; 'ç' -> 'c'; 'â' -> 'a'; 'î' -> 'i'; 'û' -> 'u'; else -> it }
+}.joinToString("")
+
+
 @Composable
 fun App(
     vm: MainViewModel,
+    sekmeIstegi: String? = null,
+    onSekmeAcildi: () -> Unit = {},
     sharedUrl: String?,
     onSharedConsumed: () -> Unit,
     sharedList: String?,
@@ -147,7 +161,7 @@ fun App(
     // Son açık ekranı hatırla: uygulama tekrar açılınca kaldığın sekme / çalma listesi açılır
     val ekranPref = remember { ctx.getSharedPreferences("ekran", android.content.Context.MODE_PRIVATE) }
     // Ayarlar açık kaldıysa kütüphaneden başla
-    var tab by rememberSaveable { mutableIntStateOf(ekranPref.getInt("tab", 0).let { if (it == 1) 1 else 0 }) }
+    var tab by rememberSaveable { mutableIntStateOf(ekranPref.getInt("tab", 0).let { if (it in 1..2) it else 0 }) }
     var openPlaylistId by rememberSaveable { mutableStateOf(ekranPref.getString("liste", null)) }
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     var showQueue by rememberSaveable { mutableStateOf(false) }
@@ -195,9 +209,34 @@ fun App(
     val setIndir: (Boolean) -> Unit = { indirAyari = it; vm.repo.indirVarsayilan = it }
     var editTrack by remember { mutableStateOf<Track?>(null) }
 
-    val coverOf: (Track) -> File? = { vm.repo.coverOf(it) }
+    // Kapak: diske bakmadan (kaydırmayı hızlandırır); eksikse yer tutucu görünür
+    val coverOf: (Track) -> File? = remember(vm) { { t: Track -> vm.repo.kapakDosyasi(t) } }
     val toast: (String) -> Unit = { Toast.makeText(ctx, it, Toast.LENGTH_LONG).show() }
+    // "Geri al" çubuğu: silme / çıkarma işlemleri birkaç saniye geri alınabilir
+    val snack = remember { SnackbarHostState() }
+    val snackScope = rememberCoroutineScope()
+    val geriAlinabilir: (String, () -> Unit) -> Unit = { mesaj, geriAl ->
+        snackScope.launch {
+            snack.currentSnackbarData?.dismiss()
+            if (snack.showSnackbar(mesaj, actionLabel = "Geri al", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) geriAl()
+        }
+    }
+    val kutuphanedenKaldir: (List<Track>) -> Unit = { list ->
+        val geri = vm.kaldir(list)
+        geriAlinabilir(if (list.size == 1) "\"${list[0].title}\" kaldırıldı" else "${list.size} şarkı kaldırıldı", geri)
+    }
+    var showDepolama by rememberSaveable { mutableStateOf(false) }
+    var showCiftler by remember { mutableStateOf(false) }
+    val sabitler by vm.repo.sabitler.collectAsStateWithLifecycle()
+    val podcastlar by vm.pod.podcastlar.collectAsStateWithLifecycle()
+    val bolumler by vm.pod.bolumler.collectAsStateWithLifecycle()
+    val sonListeler by vm.repo.sonListeler.collectAsStateWithLifecycle()
+    LaunchedEffect(openPlaylistId) { openPlaylistId?.let { vm.repo.listeAcildi(it) } }
 
+    // Bildirimden "yeni podcast bölümü" ile açıldıysa Podcast sekmesine geç
+    LaunchedEffect(sekmeIstegi) {
+        if (sekmeIstegi == "podcast") { tab = 2; showPlayer = false; onSekmeAcildi() }
+    }
     LaunchedEffect(sharedUrl) {
         if (sharedUrl != null) {
             addInitial = sharedUrl
@@ -248,13 +287,14 @@ fun App(
         } else {
             DropdownMenuItem(text = { Text("Telefondan sil") }, onClick = { close(); confirmFileDelete = listOf(t) })
         }
-        DropdownMenuItem(text = { Text("Kütüphaneden kaldır") }, onClick = { close(); confirmDelete = listOf(t) })
+        DropdownMenuItem(text = { Text("Kütüphaneden kaldır") }, onClick = { close(); kutuphanedenKaldir(listOf(t)) })
     }
 
     Box(Modifier.fillMaxSize().background(arkaPlan())) {
       // Şeffaf zeminde yazı/simge rengi temaya göre olsun (koyu modda siyah kalmasın)
       CompositionLocalProvider(LocalContentColor provides c.onBackground, LocalAkilli provides player.akilli) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snack) },
             containerColor = Color.Transparent,
             contentColor = c.onBackground,
             floatingActionButton = {
@@ -289,6 +329,10 @@ fun App(
                         )
                         NavigationBarItem(
                             selected = tab == 2, onClick = { tab = 2 }, colors = itemColors,
+                            icon = { Icon(Icons.Default.Podcasts, null) }, label = { Text("Podcast") },
+                        )
+                        NavigationBarItem(
+                            selected = tab == 3, onClick = { tab = 3 }, colors = itemColors,
                             icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Ayarlar") },
                         )
                     }
@@ -316,6 +360,13 @@ fun App(
                     }
                     tab == 0 -> LibraryScreen(
                         tracks, downloads, player.currentId, coverOf,
+                        // Genel arama: listeler ve podcast'ler de aranır
+                        playlists = playlists,
+                        onOpenPlaylist = { openPlaylistId = it.id; openSmart = null; tab = 1 },
+                        podcastlar = podcastlar,
+                        bolumler = bolumler,
+                        onOpenPodcast = { vm.pod.acilacak.value = it.id; tab = 2 },
+                        onBolum = { vm.bolumCal(it) },
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
                         onDismissDownload = vm.repo::dismissDownload,
                         onRetryDownload = vm.repo::retryDownload,
@@ -326,7 +377,7 @@ fun App(
                         shuffle = player.shuffle,
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
-                        onSelDelete = { confirmDelete = it },
+                        onSelDelete = kutuphanedenKaldir,
                         onSelDeleteFile = { confirmFileDelete = it },
                         onSelDownload = { vm.repo.downloadTracks(it); toast("İndirme başladı") },
                         fileOf = vm.repo::fileOf,
@@ -338,17 +389,17 @@ fun App(
                         openPl, tracks, player.currentId, coverOf,
                         onBack = { openPlaylistId = null },
                         onPlay = { list, i, shuffle -> vm.playTracks(list, i, shuffle) },
-                        onRemove = { vm.repo.removeFromPlaylist(openPl.id, it.id) },
+                        onRemove = { t -> geriAlinabilir("Listeden çıkarıldı", vm.repo.listedenCikarGeriAlinabilir(openPl.id, listOf(t.id))) },
                         onRename = { vm.repo.renamePlaylist(openPl.id, it) },
                         onMove = { t, d -> vm.repo.moveInPlaylist(openPl.id, t.id, d) },
                         onAddTracks = { vm.repo.addTracksToPlaylist(openPl.id, it) },
-                        onRemoveMany = { list -> list.forEach { vm.repo.removeFromPlaylist(openPl.id, it.id) } },
+                        onRemoveMany = { list -> geriAlinabilir("${list.size} şarkı listeden çıkarıldı", vm.repo.listedenCikarGeriAlinabilir(openPl.id, list.map { it.id })) },
                         onSelQueue = { vm.queueTracks(it, basa = false); toast(if (it.size == 1) "Sıraya eklendi" else "${it.size} şarkı sıraya eklendi") },
                         onSelQueueNext = { vm.queueTracks(listOf(it), basa = true); toast("Sıradaki olarak çalacak") },
                         shuffle = player.shuffle,
                         onToggleShuffle = vm::toggleShuffle,
                         onSelAddToPlaylist = { pickPlaylistFor = it },
-                        onSelDelete = { confirmDelete = it },
+                        onSelDelete = kutuphanedenKaldir,
                         onSelDeleteFile = { confirmFileDelete = it },
                         onSelDownload = { vm.repo.downloadTracks(it); toast("İndirme başladı") },
                         fileOf = vm.repo::fileOf,
@@ -377,8 +428,18 @@ fun App(
                         onOpenSmart = { openSmart = it },
                         onOpen = { openPlaylistId = it.id },
                         onCreate = { vm.repo.createPlaylist(it) },
-                        onDelete = { vm.repo.deletePlaylist(it.id) },
+                        onDelete = { p -> geriAlinabilir("\"${p.name}\" silindi", vm.repo.listeSilGeriAlinabilir(p.id)) },
+                        sonCalinanlar = remember(tracks, istatistikSurum) {
+                            val byId = tracks.associateBy { it.id }
+                            com.dogukan.muzik.data.Istatistik.get(ctx).sonCalinanlar(15).mapNotNull { byId[it] }
+                        }.let { l -> tracks.find { it.id == player.currentId }?.let { cur -> listOf(cur) + (l - cur) } ?: l },
+                        currentId = player.currentId,
+                        onPlayRecent = { l, i -> vm.playTracks(l, i, null) },
+                        sonListeler = sonListeler,
+                        sabitler = sabitler,
+                        onSabitle = { p, on -> vm.repo.sabitle(p.id, on) },
                     )
+                    tab == 2 -> PodcastEkrani(vm, player, toast)
                     else -> SettingsScreen(
                         tema = tema,
                         onTema = onTema,
@@ -402,6 +463,8 @@ fun App(
                         normalize = vm.normalize,
                         onNormalize = { vm.normalize = it; if (it) vm.repo.sesOlcumuBaslat() },
                         onEkolayzir = { showEq = true },
+                        onDepolama = { showDepolama = true },
+                        onCiftler = { showCiftler = true },
                         onAdDuzelt = {
                             val l = vm.repo.adDuzeltmeleri()
                             if (l.isEmpty()) toast("Düzeltilecek şarkı adı yok") else adDuzeltmeler = l
@@ -429,7 +492,7 @@ fun App(
                         }
                     },
                     onArtist = {
-                        player.artist.takeIf { it.isNotBlank() }?.let {
+                        player.artist.takeIf { it.isNotBlank() && !player.podcast }?.let {
                             openGrup = "sanatci|" + com.dogukan.muzik.data.anaSanatci(it); tab = 0; showPlayer = false
                         }
                     },
@@ -462,6 +525,12 @@ fun App(
         AnimatedVisibility(visible = showEq, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
             EqualizerScreen(onClose = { showEq = false })
         }
+        AnimatedVisibility(visible = showDepolama, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
+            BackHandler { showDepolama = false }
+            DepolamaEkrani(vm.repo, coverOf, onSilDosyalar = { vm.deleteFiles(it); toast("${it.size} indirme silindi") },
+                onClose = { showDepolama = false }, toast = toast)
+        }
+        if (showCiftler) CiftlerDiyalogu(vm.repo, onClose = { showCiftler = false }, toast = toast)
       }
     }
 
@@ -661,6 +730,12 @@ private fun LibraryScreen(
     sira: Siralama,
     onSira: (Siralama) -> Unit,
     menu: @Composable (Track, () -> Unit) -> Unit,
+    playlists: List<Playlist> = emptyList(),
+    onOpenPlaylist: (Playlist) -> Unit = {},
+    podcastlar: List<com.dogukan.muzik.data.Podcast> = emptyList(),
+    bolumler: List<com.dogukan.muzik.data.Bolum> = emptyList(),
+    onOpenPodcast: (com.dogukan.muzik.data.Podcast) -> Unit = {},
+    onBolum: (com.dogukan.muzik.data.Bolum) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val c = MaterialTheme.colorScheme
@@ -674,10 +749,10 @@ private fun LibraryScreen(
     fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
     var sadeceIndirilen by rememberSaveable { mutableStateOf(false) }
     val filtered = remember(tracks, query, sira, sadeceIndirilen) {
-        val q = query.trim().lowercase(TR)
+        val q = ara(query.trim())
         val sorted = tracks.sirala(sira).let { l -> if (sadeceIndirilen) l.filter { it.indirildi } else l }
         if (q.isEmpty()) sorted
-        else sorted.filter { it.title.lowercase(TR).contains(q) || it.artist.lowercase(TR).contains(q) }
+        else sorted.filter { ara(it.title).contains(q) || ara(it.artist).contains(q) || (it.album?.let { a -> ara(a).contains(q) } == true) }
     }
 
     // Aşağı kaydırınca üstteki başlık, arama ve çal düğmeleri gizlenir; yukarı kaydırınca geri gelir
@@ -807,7 +882,39 @@ private fun LibraryScreen(
             if (!collapse || showAllDownloads) {
                 items(downloads, key = { it.id }) { DownloadRow(it, onDismissDownload, onRetryDownload) }
             }
-            if (filtered.isEmpty() && downloads.isEmpty()) {
+            // Genel arama: eşleşen listeler, podcast'ler ve bölümler (şarkılardan önce)
+            val qq = ara(query.trim())
+            val eslesenListeler = if (qq.length >= 2) playlists.filter { ara(it.name).contains(qq) }.take(5) else emptyList()
+            val eslesenPodcast = if (qq.length >= 2) podcastlar.filter { ara(it.ad).contains(qq) || ara(it.yazar).contains(qq) }.take(3) else emptyList()
+            val eslesenBolum = if (qq.length >= 3) bolumler.asSequence().filter { ara(it.baslik).contains(qq) }.take(5).toList() else emptyList()
+            val digerVar = eslesenListeler.isNotEmpty() || eslesenPodcast.isNotEmpty() || eslesenBolum.isNotEmpty()
+            if (digerVar) item(key = "genel-arama") {
+                Column(Modifier.fillMaxWidth()) {
+                    eslesenListeler.forEach { p ->
+                        ListItem(colors = transparentRow(), modifier = Modifier.clickable { onOpenPlaylist(p) },
+                            leadingContent = { Box(Modifier.size(52.dp).background(c.primaryContainer, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.AutoMirrored.Filled.QueueMusic, null, tint = c.onPrimaryContainer) } },
+                            headlineContent = { Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
+                            supportingContent = { Text("Çalma listesi · ${p.trackIds.size} şarkı", color = c.onSurfaceVariant) })
+                    }
+                    eslesenPodcast.forEach { p ->
+                        ListItem(colors = transparentRow(), modifier = Modifier.clickable { onOpenPodcast(p) },
+                            leadingContent = { Kapak(p.kapak, Modifier.size(52.dp), corner = 10.dp) },
+                            headlineContent = { Text(p.ad, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
+                            supportingContent = { Text("Podcast", color = c.onSurfaceVariant) })
+                    }
+                    eslesenBolum.forEach { b ->
+                        ListItem(colors = transparentRow(), modifier = Modifier.clickable { onBolum(b) },
+                            leadingContent = { Kapak(b.kapak ?: podcastlar.find { it.id == b.podcastId }?.kapak, Modifier.size(52.dp), corner = 10.dp) },
+                            headlineContent = { Text(b.baslik, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium) },
+                            supportingContent = { Text("Podcast bölümü · " + (podcastlar.find { it.id == b.podcastId }?.ad ?: ""), maxLines = 1,
+                                overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant) })
+                    }
+                    if (filtered.isNotEmpty()) Text("Şarkılar", style = MaterialTheme.typography.titleSmall, color = c.primary,
+                        modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 4.dp))
+                }
+            }
+            if (filtered.isEmpty() && downloads.isEmpty() && !digerVar) {
                 item {
                     EmptyState(
                         if (tracks.isEmpty()) "Henüz şarkı yok.\n+ tuşuna basıp şarkı adı ara ya da YouTube / Spotify linki yapıştır."
@@ -824,8 +931,12 @@ private fun LibraryScreen(
             }
             item { Spacer(Modifier.height(88.dp)) }
         }
+        val qq2 = ara(query.trim())
+        val genelArama = qq2.length >= 2 && (playlists.any { ara(it.name).contains(qq2) } ||
+            podcastlar.any { ara(it.ad).contains(qq2) || ara(it.yazar).contains(qq2) } ||
+            (qq2.length >= 3 && bolumler.any { ara(it.baslik).contains(qq2) }))
         val offset = (if (collapse) 1 else 0) + (if (!collapse || showAllDownloads) downloads.size else 0) +
-            (if (filtered.isEmpty() && downloads.isEmpty()) 1 else 0)
+            (if (genelArama) 1 else 0) + (if (filtered.isEmpty() && downloads.isEmpty() && !genelArama) 1 else 0)
         FastScroller(listState, Modifier.align(Alignment.TopEnd)) { idx ->
             filtered.getOrNull(idx - offset)?.let { scrollLabel(it, sira, idx - offset) }
         }
@@ -1042,9 +1153,14 @@ private fun PlaylistsScreen(
     onOpen: (Playlist) -> Unit,
     onCreate: (String) -> Unit,
     onDelete: (Playlist) -> Unit,
+    sonCalinanlar: List<Track> = emptyList(),
+    currentId: String? = null,
+    onPlayRecent: (List<Track>, Int) -> Unit = { _, _ -> },
+    sonListeler: List<String> = emptyList(),
+    sabitler: Set<String> = emptySet(),
+    onSabitle: (Playlist, Boolean) -> Unit = { _, _ -> },
 ) {
     var showNew by remember { mutableStateOf(false) }
-    var confirm by remember { mutableStateOf<Playlist?>(null) }
     val byId = remember(library) { library.associateBy { it.id } }
 
     Column(Modifier.fillMaxSize()) {
@@ -1054,6 +1170,49 @@ private fun PlaylistsScreen(
             }
         }
         LazyColumn {
+            // Son çalınan şarkılar ve son açılan listeler: yatay kaydırılır
+            if (sonCalinanlar.isNotEmpty()) item {
+                Text("Son çalınanlar", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 8.dp))
+                androidx.compose.foundation.lazy.LazyRow(
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    itemsIndexed(sonCalinanlar, key = { _, t -> "s" + t.id }) { i, t ->
+                        Column(Modifier.width(112.dp).clickable { onPlayRecent(sonCalinanlar, i) }) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Kapak(coverOf(t), Modifier.size(112.dp), corner = 12.dp)
+                                if (t.id == currentId) {
+                                    Box(Modifier.size(112.dp).background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(12.dp)))
+                                    Icon(Icons.Default.GraphicEq, null, tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                            Text(t.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(top = 6.dp))
+                            Text(t.artist, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+            val sonAcilan = sonListeler.mapNotNull { id -> playlists.find { it.id == id } }
+            if (sonAcilan.isNotEmpty()) item {
+                Text("Son açtığın listeler", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 8.dp))
+                androidx.compose.foundation.lazy.LazyRow(
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(sonAcilan, key = { "l" + it.id }) { p ->
+                        val kapak = playlistCoverOf(p) ?: p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
+                        Column(Modifier.width(96.dp).clickable { onOpen(p) }) {
+                            Kapak(kapak, Modifier.size(96.dp), corner = 12.dp)
+                            Text(p.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(top = 6.dp))
+                        }
+                    }
+                }
+            }
             item {
                 // Kendiliğinden güncellenen listeler
                 Text("Senin için", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
@@ -1085,20 +1244,33 @@ private fun PlaylistsScreen(
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp))
                 if (playlists.isEmpty()) EmptyState("Henüz çalma listesi yok. Bir şarkıyı ♥ ile beğenince \"Beğendiklerim\" listesi oluşur.")
             }
-            items(playlists.sortedByDescending { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }, key = { it.id }) { p ->
+            // Önce Beğendiklerim, sonra sabitlenenler, sonra diğerleri
+            items(playlists.sortedWith(compareByDescending<Playlist> { it.id == com.dogukan.muzik.data.MusicRepository.BEGENI_ID }
+                .thenByDescending { it.id in sabitler }), key = { it.id }) { p ->
+                val sabit = p.id in sabitler
                 var expanded by remember { mutableStateOf(false) }
                 val first = playlistCoverOf(p) ?: p.trackIds.firstNotNullOfOrNull { byId[it]?.let(coverOf) }
                 ListItem(
                     colors = transparentRow(),
                     modifier = Modifier.clickable { onOpen(p) },
                     leadingContent = { Kapak(first, Modifier.size(60.dp), corner = 12.dp) },
-                    headlineContent = { Text(p.name, fontWeight = FontWeight.SemiBold) },
+                    headlineContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (sabit) {
+                                Icon(Icons.Default.PushPin, "Sabitlendi", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(4.dp))
+                            }
+                            Text(p.name, fontWeight = FontWeight.SemiBold)
+                        }
+                    },
                     supportingContent = { Text("${p.trackIds.size} şarkı") },
                     trailingContent = {
                         Box {
                             IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, "Seçenekler") }
                             DropdownMenu(expanded, { expanded = false }) {
-                                DropdownMenuItem(text = { Text("Listeyi sil") }, onClick = { expanded = false; confirm = p })
+                                DropdownMenuItem(text = { Text(if (sabit) "Sabitlemeyi kaldır" else "En üste sabitle") },
+                                    onClick = { expanded = false; onSabitle(p, !sabit) })
+                                DropdownMenuItem(text = { Text("Listeyi sil") }, onClick = { expanded = false; onDelete(p) })
                             }
                         }
                     },
@@ -1109,16 +1281,6 @@ private fun PlaylistsScreen(
     }
 
     if (showNew) NameDialog("Yeni çalma listesi", onDismiss = { showNew = false }) { onCreate(it); showNew = false }
-
-    confirm?.let { p ->
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text("\"${p.name}\" silinsin mi?") },
-            text = { Text("Şarkılar kütüphanede kalır, sadece liste silinir.") },
-            confirmButton = { TextButton(onClick = { onDelete(p); confirm = null }) { Text("Sil") } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Vazgeç") } },
-        )
-    }
 }
 
 /**

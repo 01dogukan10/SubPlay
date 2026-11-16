@@ -3,7 +3,6 @@ package com.dogukan.muzik.player
 import android.content.Context
 import androidx.media3.common.Player
 import com.dogukan.muzik.data.MusicRepository
-import com.dogukan.muzik.data.Track
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -13,7 +12,7 @@ import org.json.JSONObject
  * Liste ayrı dosyada tutulur ve sadece değişince yazılır; saniye küçük bir dosyaya yazılır.
  */
 object KayitliKuyruk {
-    class Kayit(val sarkilar: List<Track>, val kuyrukta: List<Boolean>, val index: Int, val konum: Long)
+    class Kayit(val ogeler: List<androidx.media3.common.MediaItem>, val index: Int, val konum: Long)
 
     private fun liste(c: Context) = c.getSharedPreferences("kaldigi_yer_liste", Context.MODE_PRIVATE)
     private fun konum(c: Context) = c.getSharedPreferences("kaldigi_yer", Context.MODE_PRIVATE)
@@ -59,15 +58,20 @@ object KayitliKuyruk {
             (0 until a.length()).map { a.getString(it) } to (0 until a.length()).map { k?.optBoolean(it) == true }
         }.getOrNull() ?: return null
         val byId = repo.tracks.value.associateBy { it.id }
+        val pr = com.dogukan.muzik.data.PodcastRepo.get(c)
         val idx = konum(c).getInt("index", 0)
         val curId = ids.getOrNull(idx)
-        val secili = ids.indices.filter { byId[ids[it]] != null }
-        if (secili.isEmpty()) return null
-        val list = secili.map { byId[ids[it]]!! }
-        val flags = secili.map { sira[it] }
-        val yeniIdx = list.indexOfFirst { it.id == curId }
+        // Şarkılar kütüphaneden, podcast bölümleri podcast kaydından; silinmiş olanlar atlanır
+        val ogeler = ArrayList<androidx.media3.common.MediaItem>(); val kimlikler = ArrayList<String>()
+        ids.forEachIndexed { i, id ->
+            val oge = if (MedyaOge.podcastMi(id)) pr.bolum(com.dogukan.muzik.data.PodcastRepo.idOf(id))?.let { MedyaOge.bolum(pr, it) }
+                else byId[id]?.let { MedyaOge.of(repo, it, sira[i]) }
+            if (oge != null) { ogeler += oge; kimlikler += id }
+        }
+        if (ogeler.isEmpty()) return null
+        val yeniIdx = kimlikler.indexOf(curId)
         // Çalan şarkı kaldırıldıysa listenin aynı yerindeki şarkıdan, baştan başla
-        return if (yeniIdx >= 0) Kayit(list, flags, yeniIdx, konum(c).getLong("konum", 0L))
-        else Kayit(list, flags, idx.coerceIn(0, list.size - 1), 0L)
+        return if (yeniIdx >= 0) Kayit(ogeler, yeniIdx, konum(c).getLong("konum", 0L))
+        else Kayit(ogeler, idx.coerceIn(0, ogeler.size - 1), 0L)
     }
 }

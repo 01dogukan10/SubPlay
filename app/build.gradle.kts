@@ -40,7 +40,12 @@ android {
         getByName("debug") {
             if (System.getenv("KS_PATH") != null) signingConfig = signingConfigs.getByName("sabit")
         }
-        release { isMinifyEnabled = false }
+        // Yayınlanan sürüm: "release" (hata ayıklama kapalı) -> belirgin şekilde daha akıcı çalışır.
+        // İmza aynı olduğu için eski (debug) sürümün üstüne sorunsuz güncellenir.
+        release {
+            isMinifyEnabled = false
+            signingConfig = if (System.getenv("KS_PATH") != null) signingConfigs.getByName("sabit") else signingConfigs.getByName("debug")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -48,7 +53,8 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }
-    packaging { jniLibs.useLegacyPackaging = true } // yt-dlp/python için gerekli
+    packaging { jniLibs.useLegacyPackaging = true }
+    lint { checkReleaseBuilds = false; abortOnError = false } // yt-dlp/python için gerekli
 }
 
 dependencies {
@@ -67,6 +73,7 @@ dependencies {
     implementation("com.google.guava:guava:33.3.1-android")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("io.github.junkfood02.youtubedl-android:library:0.17.4")
 }

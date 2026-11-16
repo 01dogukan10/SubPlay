@@ -87,6 +87,8 @@ fun SettingsScreen(
     onNormalize: (Boolean) -> Unit,
     onEkolayzir: () -> Unit,
     onAdDuzelt: () -> Unit,
+    onDepolama: () -> Unit = {},
+    onCiftler: () -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
@@ -217,6 +219,27 @@ fun SettingsScreen(
                 supportingContent = { Text("Mobil verideyken indirmeler bekler, Wi-Fi gelince devam eder") },
                 trailingContent = { Switch(checked = wifi, onCheckedChange = { wifi = it; onSadeceWifi(it) }) },
             )
+            // Bluetooth bağlanınca otomatik çal
+            var bt by remember { mutableStateOf(com.dogukan.muzik.player.BluetoothAlici.acik(ctx) && com.dogukan.muzik.player.BluetoothAlici.izinVar(ctx)) }
+            val btIzin = androidx.activity.compose.rememberLauncherForActivityResult(
+                androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+            ) { verildi ->
+                bt = verildi
+                com.dogukan.muzik.player.BluetoothAlici.ayarla(ctx, verildi)
+                if (!verildi) Toast.makeText(ctx, "Bunun için \"Yakındaki cihazlar\" izni gerekiyor", Toast.LENGTH_LONG).show()
+            }
+            fun btDegistir(on: Boolean) {
+                if (on && !com.dogukan.muzik.player.BluetoothAlici.izinVar(ctx)) {
+                    btIzin.launch(android.Manifest.permission.BLUETOOTH_CONNECT)
+                } else { bt = on; com.dogukan.muzik.player.BluetoothAlici.ayarla(ctx, on) }
+            }
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { btDegistir(!bt) },
+                headlineContent = { Text("Bluetooth bağlanınca çal") },
+                supportingContent = { Text("Kulaklık, hoparlör ya da araba bağlanınca kaldığın yerden kendiliğinden çalmaya başlar") },
+                trailingContent = { Switch(checked = bt, onCheckedChange = { btDegistir(it) }) },
+            )
         }
 
         Section("Ses") {
@@ -245,6 +268,38 @@ fun SettingsScreen(
                 modifier = Modifier.clickable(onClick = onAdDuzelt),
                 headlineContent = { Text("Şarkı adlarını düzelt") },
                 supportingContent = { Text("YouTube'dan gelmiş eski şarkılardaki \"(Official Video)\", \"VEVO\" gibi ekleri temizler. Önce önizleme gösterilir.") },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable(onClick = onCiftler),
+                headlineContent = { Text("Çift şarkıları bul") },
+                supportingContent = { Text("Aynı şarkı birden çok kez eklendiyse birleştirir; listelerdeki yeri ve beğenisi korunur") },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable(onClick = onDepolama),
+                headlineContent = { Text("Depolama") },
+                supportingContent = { Text("Ne kadar yer kaplandığını gör, uzun süredir dinlemediğin indirmeleri temizle") },
+            )
+        }
+
+        Section("Podcast") {
+            val pr = remember { com.dogukan.muzik.data.PodcastRepo.get(ctx) }
+            var otoIndir by remember { mutableStateOf(pr.otoIndir) }
+            var otoSil by remember { mutableStateOf(pr.otoSil) }
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { otoIndir = !otoIndir; pr.otoIndir = otoIndir },
+                headlineContent = { Text("Yeni bölümleri otomatik indir") },
+                supportingContent = { Text("Abone olduğun podcast'lerin yeni bölümleri sadece Wi-Fi'deyken iner") },
+                trailingContent = { Switch(checked = otoIndir, onCheckedChange = { otoIndir = it; pr.otoIndir = it }) },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { otoSil = !otoSil; pr.otoSil = otoSil },
+                headlineContent = { Text("Dinlenen bölümü sil") },
+                supportingContent = { Text("Sonuna kadar dinlediğin bölümün indirilen dosyası kendiliğinden silinir") },
+                trailingContent = { Switch(checked = otoSil, onCheckedChange = { otoSil = it; pr.otoSil = it }) },
             )
         }
 

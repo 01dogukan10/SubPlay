@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Uygulama simgesine basılı tutunca çıkan kısayollar -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="devam" android:enabled="true"
+        android:icon="@drawable/ic_kisayol_devam"
+        android:shortcutShortLabel="@string/kisayol_devam" android:shortcutLongLabel="@string/kisayol_devam">
+        <intent android:action="com.subplay.muzik.KISAYOL" android:targetPackage="com.subplay.muzik"
+            android:targetClass="com.dogukan.muzik.MainActivity" android:data="subplay-kisayol://devam" />
+    </shortcut>
+    <shortcut android:shortcutId="karisik" android:enabled="true"
+        android:icon="@drawable/ic_kisayol_karisik"
+        android:shortcutShortLabel="@string/kisayol_karisik" android:shortcutLongLabel="@string/kisayol_karisik">
+        <intent android:action="com.subplay.muzik.KISAYOL" android:targetPackage="com.subplay.muzik"
+            android:targetClass="com.dogukan.muzik.MainActivity" android:data="subplay-kisayol://karisik" />
+    </shortcut>
+    <shortcut android:shortcutId="begeni" android:enabled="true"
+        android:icon="@drawable/ic_kisayol_begeni"
+        android:shortcutShortLabel="@string/kisayol_begeni" android:shortcutLongLabel="@string/kisayol_begeni">
+        <intent android:action="com.subplay.muzik.KISAYOL" android:targetPackage="com.subplay.muzik"
+            android:targetClass="com.dogukan.muzik.MainActivity" android:data="subplay-kisayol://begeni" />
+    </shortcut>
+</shortcuts>
