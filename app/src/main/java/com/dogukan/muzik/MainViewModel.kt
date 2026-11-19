@@ -46,6 +46,7 @@ data class PlayerUi(
     val shuffle: Boolean = false,
     val akilli: Boolean = false, // akıllı karıştırma (öneri ekleyen)
     val oneri: Boolean = false,  // çalan şarkı akıllı karıştırmanın önerisi
+    val onizleme: Boolean = false, // aramadan dinlenen, kütüphanede olmayan şarkı
     val podcast: Boolean = false, // çalan bir podcast bölümü
     val hiz: Float = 1f,
     val repeat: Int = Player.REPEAT_MODE_OFF,
@@ -266,6 +267,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = PlayerUi(
             currentId = item?.mediaId,
             oneri = item?.mediaId?.startsWith("oneri:") == true,
+            onizleme = item?.mediaId?.startsWith("yt:") == true &&
+                repo.tracks.value.none { t -> t.videoId == item.mediaId.removePrefix("yt:") },
             podcast = MedyaOge.podcastMi(item?.mediaId),
             hiz = c.playbackParameters.speed,
             title = item?.let { c.mediaMetadata.title?.toString() ?: it.mediaMetadata.title?.toString() ?: "" },
@@ -302,10 +305,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pod = com.dogukan.muzik.data.PodcastRepo.get(app)
 
     /** Bölümü kaldığı yerden çal. */
-    fun bolumCal(b: com.dogukan.muzik.data.Bolum) {
+    /**
+     * Bölümü kaldığı yerden çal. Podcast'in diğer bölümleri de (listedeki sırayla) sıraya girer;
+     * böylece "sonraki / önceki" (Bluetooth / interkom tuşları dahil) başka bölüme geçer.
+     */
+    fun bolumCal(b: com.dogukan.muzik.data.Bolum, liste: List<com.dogukan.muzik.data.Bolum>? = null) {
         val c = controller ?: return
         val baslangic = if (b.dinlendi) 0L else b.konumMs
-        c.setMediaItems(listOf(MedyaOge.bolum(pod, b)), 0, baslangic)
+        val l = (liste ?: pod.bolumleri(b.podcastId)).let { if (it.any { x -> x.id == b.id }) it else listOf(b) }
+        val idx = l.indexOfFirst { it.id == b.id }.coerceAtLeast(0)
+        c.shuffleModeEnabled = false // bölümler sırayla
+        c.setMediaItems(l.map { MedyaOge.bolum(pod, it) }, idx, baslangic)
         c.prepare(); c.play()
         refresh()
     }
@@ -323,7 +333,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun togglePlay() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
-    fun next() { controller?.seekToNext() }
+    /** Sonraki şarkı; listenin sonundaysa başa döner (tuş hiç boşa basılmasın). */
+    fun next() {
+        val c = controller ?: return
+        if (c.hasNextMediaItem()) c.seekToNext()
+        else if (c.mediaItemCount > 0) {
+            val ilk = c.currentTimeline.getFirstWindowIndex(c.shuffleModeEnabled)
+            if (ilk != androidx.media3.common.C.INDEX_UNSET) c.seekToDefaultPosition(ilk)
+        }
+    }
     fun previous() { controller?.seekToPrevious() }
     fun seekTo(ms: Long) { controller?.seekTo(ms); refresh() }
     /** Spotify gibi üç durum: kapalı -> karışık -> akıllı karışık (öneri ekler) -> kapalı. */
@@ -383,6 +401,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteTracks(list: List<Track>) = list.forEach { deleteTrack(it) }
+
+    /**
+     * Arama sonucunu indirmeden hemen çal (önizleme). Çalan listeyi bozmaz: şarkı çalanın hemen
+     * arkasına eklenip çalınır; önceki önizleme şarkıları sıradan çıkarılır.
+     */
+    /** Çalan önizleme şarkısını kütüphaneye ekle (istersen indir). */
+    fun onizlemeyiEkle(indir: Boolean) {
+        val item = controller?.currentMediaItem ?: return
+        if (!item.mediaId.startsWith("yt:")) return
+        val id = repo.oneriyiEkle(com.dogukan.muzik.data.Oneri(item.mediaId.removePrefix("yt:"),
+            item.mediaMetadata.title?.toString().orEmpty(), item.mediaMetadata.artist?.toString().orEmpty()))
+        if (indir) repo.tracks.value.find { it.id == id }?.let { repo.downloadTracks(listOf(it)) }
+        repo.notice(if (indir) "İndirme başladı" else "Kütüphaneye eklendi")
+        refresh()
+    }
+
+    fun onizle(r: com.dogukan.muzik.data.SearchResult) {
+        val c = controller ?: return
+        val (ad, sanatci) = repo.adSanatci(r)
+        val item = MedyaOge.onizleme(r.id, ad, sanatci)
+        for (i in c.mediaItemCount - 1 downTo 0) {
+            if (c.getMediaItemAt(i).mediaId.startsWith("yt:") && i != c.currentMediaItemIndex) c.removeMediaItem(i)
+        }
+        if (c.mediaItemCount == 0) {
+            c.setMediaItems(listOf(item))
+        } else {
+            val at = c.currentMediaItemIndex + 1
+            c.addMediaItem(at, item)
+            c.seekTo(at, 0L)
+        }
+        c.prepare(); c.play()
+        refresh()
+    }
 
     private fun kisayol(k: String) {
         val c = controller ?: return

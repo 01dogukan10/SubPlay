@@ -107,6 +107,24 @@ object MedyaOge {
     fun kuyrukta(item: MediaItem?) = item?.mediaMetadata?.extras?.getBoolean("kuyruk") == true
 
     /** Akıllı karıştırmanın önerdiği, kütüphanede olmayan şarkı (internetten çalar). */
+    /** Aramadan dinlenen şarkı: kütüphaneye eklenmez, inmez, internetten çalar. */
+    fun onizleme(videoId: String, title: String, artist: String): MediaItem {
+        val uri = Uri.parse("subplay://yt/$videoId")
+        return MediaItem.Builder()
+            .setMediaId("yt:$videoId")
+            .setUri(uri)
+            .setRequestMetadata(MediaItem.RequestMetadata.Builder().setMediaUri(uri).build())
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle(title)
+                    .setArtist(artist.ifBlank { null })
+                    .setArtworkUri(Uri.parse("https://i.ytimg.com/vi/$videoId/hqdefault.jpg"))
+                    .setExtras(Bundle().apply { putBoolean("kuyruk", false); putBoolean("onizleme", true) })
+                    .build()
+            )
+            .build()
+    }
+
     fun oneri(videoId: String, title: String, artist: String): MediaItem {
         val uri = Uri.parse("subplay://yt/$videoId")
         return MediaItem.Builder()
@@ -474,6 +492,8 @@ class PlaybackService : MediaLibraryService() {
         }
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolving))
+            // "Önceki": şarkının ilk 10 saniyesinde önceki şarkıya geçer, sonrasında şarkıyı başa sarar
+            .setMaxSeekToPreviousPositionMs(10_000)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -553,6 +573,14 @@ class PlaybackService : MediaLibraryService() {
                     com.dogukan.muzik.data.PodcastRepo.get(this@PlaybackService)
                         .dinlendiYap(com.dogukan.muzik.data.PodcastRepo.idOf(oncekiId!!), true, kendiliginden = true)
                 }
+                // Başka bölüme geçildiyse o bölümün kaldığı yerden devam et
+                if (MedyaOge.podcastMi(mediaItem?.mediaId) && reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                    val b = com.dogukan.muzik.data.PodcastRepo.get(this@PlaybackService)
+                        .bolum(com.dogukan.muzik.data.PodcastRepo.idOf(mediaItem!!.mediaId))
+                    if (b != null && !b.dinlendi && b.konumMs > 5_000 && player.currentPosition < 2_000) {
+                        main.post { if (player.currentMediaItem?.mediaId == mediaItem.mediaId) player.seekTo(b.konumMs) }
+                    }
+                }
                 val hiz = if (MedyaOge.podcastMi(mediaItem?.mediaId)) com.dogukan.muzik.data.PodcastRepo.get(this@PlaybackService).hiz else 1f
                 if (player.playbackParameters.speed != hiz) player.setPlaybackSpeed(hiz)
                 dinlemeyiKaydet()
@@ -596,7 +624,7 @@ class PlaybackService : MediaLibraryService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
 
-        session = MediaLibrarySession.Builder(this, player, object : MediaLibrarySession.Callback {
+        session = MediaLibrarySession.Builder(this, DonguluOynatici(player), object : MediaLibrarySession.Callback {
                 override fun onGetLibraryRoot(
                     session: MediaLibrarySession,
                     browser: MediaSession.ControllerInfo,
@@ -738,6 +766,11 @@ class PlaybackService : MediaLibraryService() {
             })
             .setSessionActivity(openApp)
             .build()
+        // Bildirim / kilit ekranı: ⏮ ve ⏭ yerleri hep ayrılsın; ♥ ve karıştır onların yerini almasın
+        session?.setSessionExtras(Bundle().apply {
+            putBoolean(androidx.media3.session.MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_NEXT, true)
+            putBoolean(androidx.media3.session.MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_PREV, true)
+        })
         dugmeleriGuncelle()
         // Beğeni başka yerden değişince (uygulama) bildirimdeki ♥ da güncellensin
         isScope.launch { repo.playlists.collect { dugmeleriGuncelle() } }
@@ -847,3 +880,37 @@ class PlaybackService : MediaLibraryService() {
         super.onDestroy()
     }
 }
+
+/**
+ * Bildirim, kilit ekranı, Bluetooth / interkom ve widget için oynatıcı: listenin son şarkısındayken
+ * "sonraki" de çalışır (listenin başına döner). Böylece ⏭ hiç kaybolmaz ve tuş boşa basılmış olmaz.
+ */
+private class DonguluOynatici(private val p: androidx.media3.common.Player) : androidx.media3.common.ForwardingPlayer(p) {
+    override fun getAvailableCommands(): androidx.media3.common.Player.Commands {
+        val k = super.getAvailableCommands()
+        return if (p.mediaItemCount > 0) k.buildUpon()
+            .add(androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT)
+            .add(androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+            .add(androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS)
+            .add(androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+            .build() else k
+    }
+
+    override fun isCommandAvailable(command: Int): Boolean = when (command) {
+        androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT, androidx.media3.common.Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+        androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS, androidx.media3.common.Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ->
+            p.mediaItemCount > 0
+        else -> super.isCommandAvailable(command)
+    }
+
+    private fun basaDon() {
+        val t = p.currentTimeline
+        if (t.isEmpty) return
+        val ilk = t.getFirstWindowIndex(p.shuffleModeEnabled)
+        if (ilk != androidx.media3.common.C.INDEX_UNSET) p.seekToDefaultPosition(ilk)
+    }
+
+    override fun seekToNext() { if (p.hasNextMediaItem()) super.seekToNext() else basaDon() }
+    override fun seekToNextMediaItem() { if (p.hasNextMediaItem()) super.seekToNextMediaItem() else basaDon() }
+}
+

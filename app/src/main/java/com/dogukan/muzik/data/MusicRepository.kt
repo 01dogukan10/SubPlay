@@ -46,7 +46,11 @@ data class Track(
 }
 
 /** kaynak: Spotify / YouTube liste linki -> liste oradan kendiliğinden eşitlenir. */
-data class Playlist(val id: String, val name: String, val trackIds: List<String>, val cover: String? = null, val kaynak: String? = null)
+data class Playlist(
+    val id: String, val name: String, val trackIds: List<String>, val cover: String? = null, val kaynak: String? = null,
+    /** Karışım (Spotify Blend gibi): kaynak listelerin kimlikleri. Doluysa şarkılar bu listelerden kendiliğinden oluşur. */
+    val karisim: List<String>? = null,
+)
 
 /** Akıllı karıştırmanın önerdiği (kütüphanede olmayan) şarkı. */
 data class Oneri(val videoId: String, val title: String, val artist: String)
@@ -272,6 +276,9 @@ class MusicRepository private constructor(private val ctx: Context) {
             else -> startDirect(url, customTitle, indir)
         }
     }
+
+    /** Arama sonucu için temiz şarkı adı ve sanatçı ("Official Video" vb. olmadan). */
+    fun adSanatci(r: SearchResult): Pair<String, String> = ytAdSanatci(r.title, r.channel)
 
     fun downloadSearchResult(r: SearchResult, indir: Boolean = true) =
         enqueueYt(r.url, null, null, null, r.title, ytMeta = r.title to r.channel, indir = indir)
@@ -1720,17 +1727,68 @@ class MusicRepository private constructor(private val ctx: Context) {
             val o = arr.getJSONObject(i)
             val ids = o.getJSONArray("trackIds")
             Playlist(o.getString("id"), o.getString("name"), (0 until ids.length()).map { ids.getString(it) },
-                o.optString("cover").ifBlank { null }, o.optString("kaynak").ifBlank { null })
+                o.optString("cover").ifBlank { null }, o.optString("kaynak").ifBlank { null },
+                o.optJSONArray("karisim")?.let { k -> (0 until k.length()).map { k.getString(it) } })
         }
     }.getOrDefault(emptyList())
 
     private fun savePlaylists() {
+        karisimlariHesapla()
         val arr = JSONArray()
         _playlists.value.forEach { p ->
             arr.put(JSONObject().put("id", p.id).put("name", p.name).put("trackIds", JSONArray(p.trackIds))
-                .put("cover", p.cover ?: "").put("kaynak", p.kaynak ?: ""))
+                .put("cover", p.cover ?: "").put("kaynak", p.kaynak ?: "")
+                .apply { p.karisim?.let { put("karisim", JSONArray(it)) } })
         }
         plFile.writeText(arr.toString())
+    }
+
+    // ================= Karışım listeleri (Spotify Blend gibi) =================
+
+    /**
+     * Karışımın şarkıları: kaynak listelerden sırayla birer şarkı (A1, B1, A2, B2…); iki listede de olan
+     * şarkı bir kez yer alır ve öne alınır. Kaynak listeler değişince karışım da kendiliğinden güncellenir.
+     */
+    private fun karisimSarkilari(p: Playlist, hepsi: List<Playlist>, var_: Set<String>): List<String> {
+        val kaynaklar = p.karisim.orEmpty().mapNotNull { id -> hepsi.find { it.id == id && it.karisim == null } }
+            .map { k -> k.trackIds.filter { it in var_ } }
+        if (kaynaklar.isEmpty()) return emptyList()
+        val ortak = if (kaynaklar.size > 1) kaynaklar.drop(1).fold(kaynaklar.first().toSet()) { a, l -> a intersect l.toSet() } else emptySet()
+        val sonuc = LinkedHashSet<String>()
+        // Önce ortak zevk: hepsinde olanlar
+        kaynaklar.first().filter { it in ortak }.forEach { sonuc += it }
+        val enUzun = kaynaklar.maxOf { it.size }
+        for (i in 0 until enUzun) for (l in kaynaklar) l.getOrNull(i)?.let { sonuc += it }
+        return sonuc.toList()
+    }
+
+    private fun karisimlariHesapla() {
+        val hepsi = _playlists.value
+        if (hepsi.none { it.karisim != null }) return
+        val var_ = _tracks.value.mapTo(HashSet()) { it.id }
+        _playlists.value = hepsi.map { p ->
+            if (p.karisim == null) p
+            else karisimSarkilari(p, hepsi, var_).let { y -> if (y == p.trackIds) p else p.copy(trackIds = y) }
+        }
+    }
+
+    /** İki (ya da daha çok) listeyi karıştıran yeni liste oluşturur. */
+    fun karisimOlustur(ad: String, kaynaklar: List<String>): String = synchronized(lock) {
+        val p = Playlist(UUID.randomUUID().toString(), ad.trim(), emptyList(), karisim = kaynaklar.distinct())
+        _playlists.value = _playlists.value + p
+        savePlaylists()
+        p.id
+    }
+
+    fun karisimiDuzenle(id: String, kaynaklar: List<String>) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { if (it.id == id) it.copy(karisim = kaynaklar.distinct()) else it }
+        savePlaylists()
+    }
+
+    /** Karışımı sabitle: şarkılar olduğu gibi kalır, artık kendiliğinden değişmez, elle düzenlenebilir. */
+    fun karisimiNormaleCevir(id: String) = synchronized(lock) {
+        _playlists.value = _playlists.value.map { if (it.id == id) it.copy(karisim = null) else it }
+        savePlaylists()
     }
 
     // ================= Konfor özellikleri =================
@@ -1741,19 +1799,21 @@ class MusicRepository private constructor(private val ctx: Context) {
     /** Şarkıyı (ya da akıllı karıştırma önerisini) beğen / vazgeç. Podcast için null. */
     fun begen(mediaId: String, title: String, artist: String): Boolean? {
         if (mediaId.startsWith(PodcastRepo.ON_EK)) return null
-        val oneri = mediaId.startsWith("oneri:")
-        val vid = mediaId.removePrefix("oneri:")
+        // Akıllı karıştırma önerisi ya da aramadan dinlenen (önizleme) şarkı: önce kütüphaneye eklenir
+        val oneri = mediaId.startsWith("oneri:") || mediaId.startsWith("yt:")
+        val vid = mediaId.removePrefix("oneri:").removePrefix("yt:")
         val id = if (oneri) oneriyiEkle(Oneri(vid, title, artist)) else mediaId
         val b = toggleLike(id)
-        if (oneri && b) oneriyiKaydet(id, vid)
+        // Akıllı karıştırma önerisi önbellekten kütüphaneye iner; aramadan dinlenen sadece eklenir (indirme kararı senin)
+        if (mediaId.startsWith("oneri:") && b) oneriyiKaydet(id, vid)
         return b
     }
 
     fun begenildiMi(mediaId: String?): Boolean {
         if (mediaId == null) return false
         val liked = _playlists.value.find { it.id == BEGENI_ID }?.trackIds?.toSet() ?: return false
-        if (mediaId.startsWith("oneri:")) {
-            val vid = mediaId.removePrefix("oneri:")
+        if (mediaId.startsWith("oneri:") || mediaId.startsWith("yt:")) {
+            val vid = mediaId.removePrefix("oneri:").removePrefix("yt:")
             return _tracks.value.any { it.videoId == vid && it.id in liked }
         }
         return mediaId in liked

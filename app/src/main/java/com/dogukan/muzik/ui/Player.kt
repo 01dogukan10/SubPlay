@@ -1,5 +1,7 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.runtime.LaunchedEffect
@@ -294,6 +296,19 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
+    if (ui.onizleme) {
+        // Aramadan dinleniyor: kütüphanede değil, telefona inmedi — karar senin
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 6.dp)) {
+            Text("Önizleme", style = MaterialTheme.typography.labelMedium, color = c.primary)
+            androidx.compose.material3.AssistChip(onClick = { vm.onizlemeyiEkle(false) },
+                label = { Text("Kütüphaneye ekle") },
+                leadingIcon = { Icon(Icons.Default.LibraryAdd, null, Modifier.size(18.dp)) })
+            androidx.compose.material3.AssistChip(onClick = { vm.onizlemeyiEkle(true) },
+                label = { Text("İndir") },
+                leadingIcon = { Icon(Icons.Default.Download, null, Modifier.size(18.dp)) })
+        }
+    }
     if (ui.oneri) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
             OneriIsareti(16.dp)
@@ -348,8 +363,11 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
     ) {
         val off = c.onSurfaceVariant
         if (ui.podcast) {
-            // Podcast: hız, 15 sn geri, çal, 30 sn ileri
+            // Podcast: hız, önceki bölüm, 15 sn geri, çal, 30 sn ileri, sonraki bölüm
             HizDugmesi(ui.hiz, vm::hizAyarla)
+            IconButton(onClick = vm::previous, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Default.SkipPrevious, "Önceki bölüm", modifier = Modifier.size(30.dp))
+            }
             AtlaDugmesi(-15) { vm.atla(-15_000) }
         } else {
         IconButton(onClick = vm::toggleShuffle) { KarisikIkon(ui.shuffle) }
@@ -370,7 +388,9 @@ private fun InfoAndControls(ui: PlayerUi, vm: MainViewModel, ekstra: OynaticiEks
         }
         if (ui.podcast) {
             AtlaDugmesi(30) { vm.atla(30_000) }
-            Spacer(Modifier.size(48.dp))
+            IconButton(onClick = vm::next, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Default.SkipNext, "Sonraki bölüm", modifier = Modifier.size(30.dp))
+            }
         } else {
         IconButton(onClick = vm::next, modifier = Modifier.size(56.dp)) {
             Icon(Icons.Default.SkipNext, "Sonraki", modifier = Modifier.size(40.dp))

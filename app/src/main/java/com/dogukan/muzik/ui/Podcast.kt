@@ -318,7 +318,7 @@ private fun PodcastDetay(p: Podcast, list: List<Bolum>, vm: MainViewModel, playe
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val ilk = list.firstOrNull { !it.dinlendi }
-                if (ilk != null) Button(onClick = { vm.bolumCal(ilk) }) {
+                if (ilk != null) Button(onClick = { vm.bolumCal(ilk, list) }) {
                     Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(4.dp))
                     Text(if (ilk.konumMs > 0) "Devam et" else "En yeniyi çal")
                 }
@@ -328,7 +328,7 @@ private fun PodcastDetay(p: Podcast, list: List<Bolum>, vm: MainViewModel, playe
             }
         }
         if (gosterilen.isEmpty()) item { Bilgi(if (sadeceDinlenmemis) "Dinlenmemiş bölüm kalmadı." else "Bölüm bulunamadı.") }
-        items(gosterilen, key = { it.id }) { b -> BolumSatiri(b, vm.pod, vm, player, kapakGoster = false, toast = toast) }
+        items(gosterilen, key = { it.id }) { b -> BolumSatiri(b, vm.pod, vm, player, kapakGoster = false, toast = toast, liste = gosterilen) }
         item { Spacer(Modifier.height(96.dp)) }
     }
 
@@ -350,7 +350,7 @@ private fun sureYaz(sn: Int): String = when {
 }
 
 @Composable
-private fun BolumSatiri(b: Bolum, pr: PodcastRepo, vm: MainViewModel, player: PlayerUi, kapakGoster: Boolean, toast: (String) -> Unit) {
+private fun BolumSatiri(b: Bolum, pr: PodcastRepo, vm: MainViewModel, player: PlayerUi, kapakGoster: Boolean, toast: (String) -> Unit, liste: List<Bolum>? = null) {
     val c = MaterialTheme.colorScheme
     val ilerleme by pr.ilerleme.collectAsStateWithLifecycle()
     var menu by remember { mutableStateOf(false) }
@@ -414,7 +414,7 @@ private fun BolumSatiri(b: Bolum, pr: PodcastRepo, vm: MainViewModel, player: Pl
                 }
             }
         },
-        modifier = Modifier.clickable { vm.bolumCal(b) },
+        modifier = Modifier.clickable { vm.bolumCal(b, liste) },
     )
     if (notlar) {
         AlertDialog(

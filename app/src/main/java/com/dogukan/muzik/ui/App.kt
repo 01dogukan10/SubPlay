@@ -1,5 +1,9 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.material.icons.automirrored.filled.CallMerge
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.LibraryAddCheck
+import androidx.compose.material.icons.filled.LibraryAdd
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SnackbarHostState
@@ -227,6 +231,7 @@ fun App(
     }
     var showDepolama by rememberSaveable { mutableStateOf(false) }
     var showCiftler by remember { mutableStateOf(false) }
+    var karisimDuzenle by remember { mutableStateOf<Playlist?>(null) }
     val sabitler by vm.repo.sabitler.collectAsStateWithLifecycle()
     val podcastlar by vm.pod.podcastlar.collectAsStateWithLifecycle()
     val bolumler by vm.pod.bolumler.collectAsStateWithLifecycle()
@@ -409,6 +414,9 @@ fun App(
                         onCover = { vm.repo.setPlaylistCover(openPl.id, it) },
                         sira = vm.repo.siralama("liste_${openPl.id}", Siralama.LISTE),
                         onSira = { vm.repo.setSiralama("liste_${openPl.id}", it) },
+                        karisimKaynaklari = openPl.karisim?.mapNotNull { k -> playlists.find { it.id == k }?.name },
+                        onKarisimDuzenle = { karisimDuzenle = openPl },
+                        onKarisimiSabitle = { vm.repo.karisimiNormaleCevir(openPl.id); toast("Artık normal liste; elle düzenleyebilirsin") },
                     )
                     tab == 1 && openSmart == "istatistik" -> StatsScreen(tracks, coverOf, istatistikSurum) { openSmart = null }
                     tab == 1 && openSmart != null -> {
@@ -438,6 +446,11 @@ fun App(
                         sonListeler = sonListeler,
                         sabitler = sabitler,
                         onSabitle = { p, on -> vm.repo.sabitle(p.id, on) },
+                        onKarisim = { ad, ids ->
+                            val id = vm.repo.karisimOlustur(ad, ids)
+                            openPlaylistId = id
+                            toast("Karışım oluşturuldu")
+                        },
                     )
                     tab == 2 -> PodcastEkrani(vm, player, toast)
                     else -> SettingsScreen(
@@ -531,6 +544,15 @@ fun App(
                 onClose = { showDepolama = false }, toast = toast)
         }
         if (showCiftler) CiftlerDiyalogu(vm.repo, onClose = { showCiftler = false }, toast = toast)
+        karisimDuzenle?.let { p ->
+            KarisimDiyalogu(playlists.filter { it.karisim == null }, p.karisim.orEmpty().toSet(), ilkAd = p.name,
+                baslik = "Karışımı düzenle", onayYazi = "Kaydet",
+                onDismiss = { karisimDuzenle = null }) { ad, ids ->
+                vm.repo.karisimiDuzenle(p.id, ids)
+                if (ad != p.name) vm.repo.renamePlaylist(p.id, ad)
+                karisimDuzenle = null
+            }
+        }
       }
     }
 
@@ -542,10 +564,14 @@ fun App(
             onDismiss = { showAdd = false },
             onAdd = { url, title -> vm.repo.startDownload(url, title, indirAyari); showAdd = false },
             onSearch = vm.repo::search,
-            onPick = {
-                vm.repo.downloadSearchResult(it, indirAyari); showAdd = false
-                if (!indirAyari) toast("Kütüphaneye eklendi")
+            // Arama sonucu: dokununca indirmeden çalar; ➕ kütüphaneye ekler, ⬇ indirir
+            onPick = { r, indir ->
+                vm.repo.downloadSearchResult(r, indir)
+                toast(if (indir) "İndirme başladı" else "Kütüphaneye eklendi")
             },
+            onPreview = { vm.onizle(it) },
+            calanId = player.currentId,
+            calarken = player.isPlaying,
             indir = indirAyari,
             onIndir = setIndir,
             onBulk = { showAdd = false; bulkInitial = ""; showBulk = true },
@@ -646,7 +672,7 @@ fun App(
     pickPlaylistFor?.let { list ->
         val ids = list.map { it.id }
         AddToPlaylistDialog(
-            playlists,
+            playlists.filter { it.karisim == null }, // karışımlar kendiliğinden oluşur, elle şarkı eklenmez
             onDismiss = { pickPlaylistFor = null },
             onPick = { vm.repo.addTracksToPlaylist(it, ids); pickPlaylistFor = null; if (ids.size > 1) toast("${ids.size} şarkı listeye eklendi") },
             onCreate = { name -> vm.repo.addTracksToPlaylist(vm.repo.createPlaylist(name), ids); pickPlaylistFor = null },
@@ -1159,12 +1185,17 @@ private fun PlaylistsScreen(
     sonListeler: List<String> = emptyList(),
     sabitler: Set<String> = emptySet(),
     onSabitle: (Playlist, Boolean) -> Unit = { _, _ -> },
+    onKarisim: (String, List<String>) -> Unit = { _, _ -> },
 ) {
     var showNew by remember { mutableStateOf(false) }
+    var karisimIcin by remember { mutableStateOf<Set<String>?>(null) } // açıksa önceden seçili listeler
     val byId = remember(library) { library.associateBy { it.id } }
 
     Column(Modifier.fillMaxSize()) {
         ScreenTitle("Listeler") {
+            if (playlists.count { it.karisim == null } >= 2) {
+                IconButton(onClick = { karisimIcin = emptySet() }) { Icon(Icons.AutoMirrored.Filled.CallMerge, "Listeleri karıştır") }
+            }
             NTonalButton(onClick = { showNew = true }) {
                 Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Yeni")
             }
@@ -1263,11 +1294,17 @@ private fun PlaylistsScreen(
                             Text(p.name, fontWeight = FontWeight.SemiBold)
                         }
                     },
-                    supportingContent = { Text("${p.trackIds.size} şarkı") },
+                    supportingContent = {
+                        val kaynak = p.karisim?.mapNotNull { k -> playlists.find { it.id == k }?.name }
+                        Text(if (kaynak != null) "Karışım · ${kaynak.joinToString(" + ")} · ${p.trackIds.size} şarkı" else "${p.trackIds.size} şarkı",
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
                     trailingContent = {
                         Box {
                             IconButton(onClick = { expanded = true }) { Icon(Icons.Default.MoreVert, "Seçenekler") }
                             DropdownMenu(expanded, { expanded = false }) {
+                                if (p.karisim == null) DropdownMenuItem(text = { Text("Başka listeyle karıştır") },
+                                    onClick = { expanded = false; karisimIcin = setOf(p.id) })
                                 DropdownMenuItem(text = { Text(if (sabit) "Sabitlemeyi kaldır" else "En üste sabitle") },
                                     onClick = { expanded = false; onSabitle(p, !sabit) })
                                 DropdownMenuItem(text = { Text("Listeyi sil") }, onClick = { expanded = false; onDelete(p) })
@@ -1281,6 +1318,55 @@ private fun PlaylistsScreen(
     }
 
     if (showNew) NameDialog("Yeni çalma listesi", onDismiss = { showNew = false }) { onCreate(it); showNew = false }
+    karisimIcin?.let { secili ->
+        KarisimDiyalogu(playlists.filter { it.karisim == null }, secili, ilkAd = null,
+            onDismiss = { karisimIcin = null }) { ad, ids -> onKarisim(ad, ids); karisimIcin = null }
+    }
+}
+
+/** Karışım: hangi listeler birleşsin? (en az 2) ve adı. */
+@Composable
+fun KarisimDiyalogu(
+    listeler: List<Playlist>, secili: Set<String>, ilkAd: String?,
+    baslik: String = "Listeleri karıştır", onayYazi: String = "Oluştur",
+    onDismiss: () -> Unit, onOnay: (String, List<String>) -> Unit,
+) {
+    var sec by remember { mutableStateOf(secili) }
+    var ad by remember { mutableStateOf(ilkAd ?: "") }
+    var adElle by remember { mutableStateOf(ilkAd != null) }
+    val otoAd = listeler.filter { it.id in sec }.joinToString(" + ") { it.name }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(baslik) },
+        text = {
+            Column {
+                Text("Seçtiğin listelerden sırayla şarkı alınır, hepsinde olan şarkılar öne gelir. Listeler değişince karışım da güncellenir.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = if (adElle) ad else otoAd, onValueChange = { ad = it; adElle = true },
+                    label = { Text("Karışımın adı") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                LazyColumn(Modifier.heightIn(max = 320.dp)) {
+                    items(listeler, key = { it.id }) { p ->
+                        Row(Modifier.fillMaxWidth().clickable { sec = if (p.id in sec) sec - p.id else sec + p.id }
+                            .padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = p.id in sec, onCheckedChange = { sec = if (it) sec + p.id else sec - p.id })
+                            Text(p.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${p.trackIds.size}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = sec.size >= 2, onClick = {
+                val sira = listeler.filter { it.id in sec }.map { it.id }
+                onOnay((if (adElle) ad else otoAd).ifBlank { otoAd }, sira)
+            }) { Text(if (sec.size < 2) "En az 2 liste seç" else onayYazi) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Vazgeç") } },
+    )
 }
 
 /**
@@ -1412,8 +1498,12 @@ private fun PlaylistDetail(
     onCover: (android.net.Uri?) -> Unit,
     sira: Siralama,
     onSira: (Siralama) -> Unit,
+    karisimKaynaklari: List<String>? = null,
+    onKarisimDuzenle: () -> Unit = {},
+    onKarisimiSabitle: () -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
+    val karisim = karisimKaynaklari != null
     var editing by rememberSaveable { mutableStateOf(false) }
     var order by remember(playlist.id) { mutableStateOf(sira) }
     var selected by remember(playlist.id) { mutableStateOf(setOf<String>()) }
@@ -1509,6 +1599,15 @@ private fun PlaylistDetail(
                     }
                     Spacer(Modifier.height(6.dp))
                     StatChip("${songs.size} şarkı", highlight = true)
+                    karisimKaynaklari?.let { kk ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.AutoMirrored.Filled.CallMerge, null, tint = c.primary, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Karışım: " + kk.joinToString(" + "), style = MaterialTheme.typography.labelMedium,
+                                color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                            IconButton(onClick = onKarisimDuzenle) { Icon(Icons.Default.Edit, "Karışımı düzenle", tint = c.primary) }
+                        }
+                    }
                     playlist.kaynak?.let { k ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(if (k.contains("spotify")) "Spotify ile eşitleniyor" else "YouTube ile eşitleniyor",
@@ -1523,7 +1622,10 @@ private fun PlaylistDetail(
             }
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (editing) {
-                    NButton(onClick = { showPicker = true }) {
+                    if (karisim) {
+                        // Karışımın şarkıları kendiliğinden oluşur; elle düzenlemek için sabitlenmeli
+                        NButton(onClick = { onKarisimiSabitle() }) { Text("Normal listeye çevir") }
+                    } else NButton(onClick = { showPicker = true }) {
                         Icon(Icons.Default.Add, null); Spacer(Modifier.width(4.dp)); Text("Şarkı ekle")
                     }
                     if (playlist.kaynak != null) {
@@ -1533,7 +1635,7 @@ private fun PlaylistDetail(
                         Icon(Icons.Default.Image, null); Spacer(Modifier.width(4.dp)); Text("Kapak")
                     }
                 } else {
-                    NOutlinedButton(onClick = { showPicker = true }) { Icon(Icons.Default.Add, "Şarkı ekle") }
+                    if (!karisim) NOutlinedButton(onClick = { showPicker = true }) { Icon(Icons.Default.Add, "Şarkı ekle") }
                     Spacer(Modifier.weight(1f))
                     if (songs.isNotEmpty()) {
                         PlayControls(
@@ -1556,7 +1658,8 @@ private fun PlaylistDetail(
                 }
             }
             if (songs.isEmpty()) {
-                EmptyState("Liste boş. \"Şarkı ekle\" ile kütüphaneden şarkı seç.")
+                EmptyState(if (karisim) "Karıştırılan listeler henüz boş. Onlara şarkı ekledikçe karışım kendiliğinden dolar."
+                    else "Liste boş. \"Şarkı ekle\" ile kütüphaneden şarkı seç.")
             }
         }
         itemsIndexed(songs, key = { _, t -> t.id }) { i, t ->
@@ -1704,11 +1807,15 @@ private fun AddDialog(
     onDismiss: () -> Unit,
     onAdd: (String, String?) -> Unit,
     onSearch: suspend (String) -> List<SearchResult>,
-    onPick: (SearchResult) -> Unit,
+    onPick: (SearchResult, Boolean) -> Unit,
     onBulk: () -> Unit,
     indir: Boolean,
     onIndir: (Boolean) -> Unit,
+    onPreview: (SearchResult) -> Unit = {},
+    calanId: String? = null,
+    calarken: Boolean = false,
 ) {
+    var eklenen by remember { mutableStateOf(mapOf<String, Boolean>()) } // id -> indirildi mi
     var text by remember { mutableStateOf(initial) }
     var title by remember { mutableStateOf("") }
     var searching by remember { mutableStateOf(false) }
@@ -1736,18 +1843,33 @@ private fun AddDialog(
         onDismissRequest = onDismiss,
         title = { Text("Şarkı ekle") },
         text = {
+            // Arama başlayınca klavyeyi kapat ki sonuçlar görünsün (pencerenin kendi klavye denetimi)
+            val odak = androidx.compose.ui.platform.LocalFocusManager.current
+            val klavye = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+            val pencere = androidx.compose.ui.platform.LocalView.current
+            LaunchedEffect(searching) {
+                if (searching) {
+                    klavye?.hide(); odak.clearFocus()
+                    pencere.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                        ?.hideSoftInputFromWindow(pencere.windowToken, 0)
+                }
+            }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     text, { text = it; results = emptyList(); error = null },
                     label = { Text("Şarkı adı ya da YouTube / Spotify linki") },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                        if (isLink) onAdd(input, title.ifBlank { null }) else if (input.isNotEmpty()) doSearch()
+                    }),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (isLink && !input.contains("spotify")) {
                     OutlinedTextField(title, { title = it }, label = { Text("Ad (isteğe bağlı)") }, singleLine = true,
                         modifier = Modifier.fillMaxWidth())
                 }
-                IndirAnahtari(indir, onIndir)
+                if (results.isEmpty()) IndirAnahtari(indir, onIndir)
                 if (results.isEmpty() && !searching) {
                     TextButton(onClick = onBulk) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null); Spacer(Modifier.width(6.dp))
@@ -1757,18 +1879,51 @@ private fun AddDialog(
                 if (searching) LinearProgressIndicator(Modifier.fillMaxWidth())
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (results.isNotEmpty()) {
-                    LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    Text("Dinlemek için dokun · ➕ kütüphaneye ekler · ⬇ indirir",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
                         items(results, key = { it.id }) { r ->
+                            val calan = calanId == "yt:${r.id}"
+                            val durum = eklenen[r.id]
                             ListItem(
                                 colors = transparentRow(),
-                                modifier = Modifier.clickable { onPick(r) },
+                                modifier = Modifier.clickable { onPreview(r) },
                                 leadingContent = {
-                                    Kapak("https://i.ytimg.com/vi/${r.id}/mqdefault.jpg", Modifier.size(48.dp), corner = 8.dp)
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Kapak("https://i.ytimg.com/vi/${r.id}/mqdefault.jpg", Modifier.size(48.dp), corner = 8.dp)
+                                        if (calan) {
+                                            Box(Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp)))
+                                            Icon(if (calarken) Icons.Default.GraphicEq else Icons.Default.Pause, null,
+                                                tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
                                 },
-                                headlineContent = { Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                                headlineContent = {
+                                    Text(r.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                        color = if (calan) MaterialTheme.colorScheme.primary else Color.Unspecified)
+                                },
                                 supportingContent = {
                                     Text(listOf(r.channel, if (r.duration > 0) fmt(r.duration * 1000) else "")
                                         .filter { it.isNotBlank() }.joinToString(" · "), maxLines = 1)
+                                },
+                                trailingContent = {
+                                    Row {
+                                        if (durum == null) {
+                                            IconButton(onClick = { onPick(r, false); eklenen = eklenen + (r.id to false) }, modifier = Modifier.size(36.dp)) {
+                                                Icon(Icons.Default.LibraryAdd, "Kütüphaneye ekle")
+                                            }
+                                            IconButton(onClick = { onPick(r, true); eklenen = eklenen + (r.id to true) }, modifier = Modifier.size(36.dp)) {
+                                                Icon(Icons.Default.Download, "İndir")
+                                            }
+                                        } else {
+                                            if (!durum) IconButton(onClick = { onPick(r, true); eklenen = eklenen + (r.id to true) }, modifier = Modifier.size(36.dp)) {
+                                                Icon(Icons.Default.Download, "İndir")
+                                            }
+                                            Icon(if (durum) Icons.Default.DownloadDone else Icons.Default.LibraryAddCheck,
+                                                if (durum) "İndiriliyor" else "Kütüphanede",
+                                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(6.dp))
+                                        }
+                                    }
                                 },
                             )
                         }
