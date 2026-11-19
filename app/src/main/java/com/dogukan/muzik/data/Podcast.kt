@@ -182,6 +182,23 @@ class PodcastRepo private constructor(private val ctx: Context) {
         dosyaB.writeText(a.toString())
     }
 
+    private var bekleyenKayit: kotlinx.coroutines.Job? = null
+
+    /** Bölüm listesini 20 sn içinde bir kez, arka planda yaz (sık konum güncellemeleri için). */
+    private fun kaydetSonra() {
+        if (bekleyenKayit?.isActive == true) return
+        bekleyenKayit = scope.launch {
+            kotlinx.coroutines.delay(20_000)
+            synchronized(lock) { kaydetB() }
+        }
+    }
+
+    /** Bekleyen kaydı hemen yaz (uygulama kapanırken, çalma dururken). */
+    fun kaydetSimdi() {
+        bekleyenKayit?.cancel(); bekleyenKayit = null
+        synchronized(lock) { kaydetB() }
+    }
+
     private fun bolumGuncelle(id: String, kaydet: Boolean = true, f: (Bolum) -> Bolum) = synchronized(lock) {
         _bolumler.value = _bolumler.value.map { if (it.id == id) f(it) else it }
         if (kaydet) kaydetB()
@@ -358,9 +375,12 @@ class PodcastRepo private constructor(private val ctx: Context) {
     // ---------------- Dinleme ----------------
 
     /** Kaldığı yeri kaydet; sonuna gelindiyse dinlendi say. */
-    fun konumKaydet(id: String, konum: Long, sure: Long) {
+    fun konumKaydet(id: String, konum: Long, sure: Long, hemen: Boolean = false) {
         val bitti = sure > 0 && konum >= sure - 30_000
-        bolumGuncelle(id) { it.copy(konumMs = if (bitti) 0 else konum, dinlendi = it.dinlendi || bitti, yeni = false) }
+        // Çalarken her 5 sn'de bir gelir: sadece bellekte güncelle, dosyaya arada bir (arka planda) yaz.
+        // Bölüm bittiyse ya da çalma durduysa hemen yaz.
+        bolumGuncelle(id, kaydet = false) { it.copy(konumMs = if (bitti) 0 else konum, dinlendi = it.dinlendi || bitti, yeni = false) }
+        if (bitti || hemen) kaydetSimdi() else kaydetSonra()
         if (bitti) bitinceSil(id)
     }
 
@@ -553,7 +573,7 @@ class PodcastIsci(c: Context, p: WorkerParameters) : CoroutineWorker(c, p) {
             val metin = if (yeniler.size == 1) ilk.baslik
                 else yeniler.mapNotNull { repo.podcast(it.podcastId)?.ad }.distinct().joinToString(", ")
             val n = NotificationCompat.Builder(c, "podcast")
-                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setSmallIcon(com.dogukan.muzik.R.drawable.ic_bildirim_podcast)
                 .setContentTitle(baslik).setContentText(metin)
                 .setContentIntent(pi).setAutoCancel(true).build()
             try { nm.notify(4, n) } catch (_: SecurityException) { }

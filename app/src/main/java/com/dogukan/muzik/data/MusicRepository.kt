@@ -848,6 +848,8 @@ class MusicRepository private constructor(private val ctx: Context) {
                     .put("kutuphane", JSONArray(libFile.takeIf { it.exists() }?.readText() ?: "[]"))
                     .put("listeler", JSONArray(plFile.takeIf { it.exists() }?.readText() ?: "[]"))
                     .put("podcastlar", PodcastRepo.get(ctx).yedekJson())
+                    .put("sabit_listeler", JSONArray(_sabitler.value.toList()))
+                    .put("son_listeler", JSONArray(_sonListeler.value))
                 dir.findFile("yedek.json")?.delete()
                 val jf = dir.createFile("application/octet-stream", "yedek.json") ?: throw IOException("yedek.json yazılamadı")
                 ctx.contentResolver.openOutputStream(jf.uri)!!.use { it.write(json.toString().toByteArray()) }
@@ -881,6 +883,8 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
 
                 json.optJSONArray("podcastlar")?.let { PodcastRepo.get(ctx).yedektenYukle(it) }
+                json.optJSONArray("sabit_listeler")?.let { a -> (0 until a.length()).forEach { sabitle(a.getString(it), true) } }
+                json.optJSONArray("son_listeler")?.let { a -> (a.length() - 1 downTo 0).forEach { listeAcildi(a.getString(it)) } }
                 val lib = json.optJSONArray("kutuphane") ?: JSONArray()
                 val haveIds = _tracks.value.map { it.id }.toSet()
                 val added = mutableListOf<Track>()
@@ -920,9 +924,13 @@ class MusicRepository private constructor(private val ctx: Context) {
                         val idx = current.indexOfFirst { it.id == o.optString("id") }
                         if (idx >= 0) {
                             val p = current[idx]
-                            current[idx] = p.copy(trackIds = p.trackIds + ids.filterNot { it in p.trackIds }, cover = p.cover ?: cover)
+                            current[idx] = p.copy(trackIds = p.trackIds + ids.filterNot { it in p.trackIds }, cover = p.cover ?: cover,
+                                kaynak = p.kaynak ?: o.optString("kaynak").ifBlank { null })
                         } else {
-                            current += Playlist(o.optString("id"), o.optString("name"), ids, cover)
+                            // Eşitleme bağlantısı ve karışım bilgisi de geri gelsin
+                            current += Playlist(o.optString("id"), o.optString("name"), ids, cover,
+                                o.optString("kaynak").ifBlank { null },
+                                o.optJSONArray("karisim")?.let { k -> (0 until k.length()).map { k.getString(it) } })
                             plCount++
                         }
                     }

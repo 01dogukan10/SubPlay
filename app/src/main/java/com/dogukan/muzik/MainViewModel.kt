@@ -292,8 +292,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Spotify gibi: kullanıcının sıraya eklediği şarkılar yeni liste çalınca da kaybolmaz
         val byId = repo.tracks.value.associateBy { it.id }
         val keep = _sira.value.queued.mapNotNull { byId[it.trackId] }
+        val podcasttan = MedyaOge.podcastMi(c.currentMediaItem?.mediaId)
         c.setMediaItems(list.map { it.toMediaItem() }, startIndex, 0L)
         if (shuffle != null) c.shuffleModeEnabled = shuffle
+        else if (podcasttan) c.shuffleModeEnabled = pod.prefs.getBoolean("muzik_karisik", false) // podcast'ten müziğe dönüş
         komut(SiraKomut.YENI_KUYRUK)
         if (keep.isNotEmpty()) queueTracks(keep, basa = false)
         c.prepare()
@@ -314,7 +316,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val baslangic = if (b.dinlendi) 0L else b.konumMs
         val l = (liste ?: pod.bolumleri(b.podcastId)).let { if (it.any { x -> x.id == b.id }) it else listOf(b) }
         val idx = l.indexOfFirst { it.id == b.id }.coerceAtLeast(0)
-        c.shuffleModeEnabled = false // bölümler sırayla
+        // Bölümler sırayla çalar; müzikteki karışık ayarı saklanır, müziğe dönünce geri gelir
+        if (!MedyaOge.podcastMi(c.currentMediaItem?.mediaId)) pod.prefs.edit().putBoolean("muzik_karisik", c.shuffleModeEnabled).apply()
+        c.shuffleModeEnabled = false
         c.setMediaItems(l.map { MedyaOge.bolum(pod, it) }, idx, baslangic)
         c.prepare(); c.play()
         refresh()
