@@ -112,7 +112,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val app = getApplication<Application>()
         val s = _update.value.surum ?: return
         if (_update.value.downloading) return
-        if (!Guncelle.kurabilir(app)) { Guncelle.izinAc(app); return }
+        if (!Guncelle.kurabilir(app)) {
+            // İzin ekranından dönünce güncelleme kendiliğinden devam etsin
+            izinBekliyor = true
+            Guncelle.izinAc(app); return
+        }
+        izinBekliyor = false
         _update.value = _update.value.copy(downloading = true, progress = null, error = null)
         viewModelScope.launch {
             try {
@@ -128,6 +133,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun dismissUpdate() { _update.value = UpdateUi() }
+
+    private var izinBekliyor = false
+
+    /** Uygulamaya geri dönüldü (ör. izin ekranından): izin verildiyse güncellemeye devam et. */
+    fun geriDonuldu() {
+        if (izinBekliyor && Guncelle.kurabilir(getApplication())) installUpdate()
+        else izinBekliyor = false
+    }
 
     init {
         Guncelle.zamanla(app)

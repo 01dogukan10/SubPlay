@@ -137,7 +137,17 @@ object Guncelle {
         return f
     }
 
-    fun kurabilir(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls()
+    /**
+     * Kurulum izni gerekiyor mu? Android 12+ ve uygulamayı en son SubPlay'in kendisi kurduysa
+     * "bilinmeyen uygulamaları yükle" izni gerekmez (kendini onaysız güncelleyebilir).
+     */
+    fun kurabilir(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls() || kendiKurdu(c)
+
+    fun kendiKurdu(c: Context): Boolean = Build.VERSION.SDK_INT >= 31 && runCatching {
+        c.packageManager.getInstallSourceInfo(c.packageName).installingPackageName == c.packageName
+    }.getOrDefault(false)
+
+    fun sonApk(c: Context): File? = File(File(c.cacheDir, "updates"), "guncelle.apk").takeIf { it.exists() }
 
     fun izinAc(c: Context) {
         c.startActivity(
@@ -146,8 +156,36 @@ object Guncelle {
         )
     }
 
-    /** Sistem kurulum ekranını açar; Android orada ayrıca onay ister. */
+    /**
+     * Güncellemeyi uygulamanın kendisi kurar (PackageInstaller). Android 12+ telefonlarda, bir kez bu yolla
+     * kurulduktan sonraki güncellemeler onay ve "bilinmeyen uygulamalar" izni istemeden kurulur.
+     * Telefon onay isterse onay ekranı açılır; olmazsa eski yönteme düşer.
+     */
     fun kur(c: Context, f: File) {
+        try {
+            val yukleyici = c.packageManager.packageInstaller
+            val ayar = android.content.pm.PackageInstaller.SessionParams(android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
+                setAppPackageName(c.packageName)
+                if (Build.VERSION.SDK_INT >= 26) setInstallReason(android.content.pm.PackageManager.INSTALL_REASON_USER)
+                if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(android.content.pm.PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
+            val no = yukleyici.createSession(ayar)
+            yukleyici.openSession(no).use { s ->
+                s.openWrite("subplay.apk", 0, f.length()).use { out ->
+                    f.inputStream().use { it.copyTo(out) }
+                    s.fsync(out)
+                }
+                val bayrak = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val pi = PendingIntent.getBroadcast(c, no, Intent(c, KurulumAlici::class.java).setPackage(c.packageName), bayrak)
+                s.commit(pi.intentSender)
+            }
+        } catch (e: Exception) {
+            kurEski(c, f)
+        }
+    }
+
+    /** Sistem kurulum ekranını açar; Android orada ayrıca onay ister. */
+    fun kurEski(c: Context, f: File) {
         val uri = FileProvider.getUriForFile(c, "${c.packageName}.fileprovider", f)
         c.startActivity(
             Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
