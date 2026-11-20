@@ -9,7 +9,7 @@ import kotlin.random.Random
  * sonra tüm şarkılar bu konumlara göre sıralanır.)
  */
 object KarisikSira {
-    fun dengeli(indices: List<Int>, artistOf: (Int) -> String, rnd: Random = Random): IntArray {
+    fun dengeli(indices: List<Int>, artistOf: (Int) -> String, rnd: Random = Random, yeniCalindi: (Int) -> Boolean = { false }): IntArray {
         if (indices.size < 2) return indices.toIntArray()
         val groups = indices.groupBy { i -> artistOf(i).trim().lowercase().ifBlank { "#$i" } }
         val placed = ArrayList<Pair<Double, Int>>(indices.size)
@@ -21,7 +21,9 @@ object KarisikSira {
             songs.forEachIndexed { k, idx ->
                 // eşit aralık + küçük sapma (her seferinde aynı desen çıkmasın)
                 val jitter = (rnd.nextDouble() - 0.5) * step * 0.2
-                placed += (offset + k * step + jitter) to idx
+                // Yakın zamanda çalınan şarkılar ikinci yarıya itilir (yine de tamamen sona değil)
+                val geri = if (yeniCalindi(idx)) 0.5 + rnd.nextDouble() * 0.5 else 0.0
+                placed += (offset + k * step + jitter + geri) to idx
             }
         }
         return placed.sortedBy { it.first }.map { it.second }.toIntArray()

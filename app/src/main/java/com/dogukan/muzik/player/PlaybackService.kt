@@ -440,9 +440,13 @@ class PlaybackService : MediaLibraryService() {
         if (!zorla && oneriSayisi >= 2) return
         val cur = player.currentMediaItem ?: return
         val repo = MusicRepository.get(this)
-        val curId = cur.mediaId
-        val vid = if (curId.startsWith("oneri:")) curId.removePrefix("oneri:") else null
-        val track = if (vid == null) repo.tracks.value.firstOrNull { it.id == curId } else null
+        // Öneriler çoğunlukla çalan şarkıya göre; arada bir listedeki başka bir şarkıya göre (çeşitlilik)
+        val byId = repo.tracks.value.associateBy { it.id }
+        val tohumId = if (kotlin.random.Random.nextInt(100) < 35) {
+            (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.filter { it in byId }.randomOrNull() ?: cur.mediaId
+        } else cur.mediaId
+        val vid = if (tohumId.startsWith("oneri:")) tohumId.removePrefix("oneri:") else null
+        val track = if (vid == null) byId[tohumId] else null
         val haric = HashSet(onerilenler).apply {
             (0 until player.mediaItemCount).forEach { i ->
                 player.getMediaItemAt(i).mediaId.takeIf { it.startsWith("oneri:") }?.let { add(it.removePrefix("oneri:")) }
@@ -853,9 +857,11 @@ class PlaybackService : MediaLibraryService() {
         val cur = player.currentMediaItemIndex.coerceIn(0, n - 1)
         val queued = (cur + 1 until n).takeWhile { MedyaOge.kuyrukta(player.getMediaItemAt(it)) }
         val rest = (0 until n).filter { it != cur && it !in queued }
+        // Son zamanlarda çaldıkların listenin sonlarına doğru gider: her açışta önce az dinlediklerin gelir
+        val son = runCatching { com.dogukan.muzik.data.Istatistik.get(this).sonCalinanlar(40).toHashSet() }.getOrDefault(hashSetOf())
         val order = intArrayOf(cur) + queued.toIntArray() + KarisikSira.dengeli(rest, { i ->
             player.getMediaItemAt(i).mediaMetadata.artist?.toString().orEmpty()
-        })
+        }, yeniCalindi = { i -> player.getMediaItemAt(i).mediaId in son })
         player.setShuffleOrder(ShuffleOrder.DefaultShuffleOrder(order, System.nanoTime()))
     }
 

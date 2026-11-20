@@ -1019,7 +1019,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             ?: t?.let { runCatching { aramaIdBul("${it.artist} ${it.title}".trim()) }.getOrNull() }
             ?: return@withContext emptyList()
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$v&list=RD$v").apply {
-            addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "25")
+            addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "50")
         }
         val json = runCatching {
             val o = YoutubeDL.getInstance().execute(req).out
@@ -1030,13 +1030,37 @@ class MusicRepository private constructor(private val ctx: Context) {
         for (i in 0 until entries.length()) {
             val e = entries.optJSONObject(i) ?: continue
             val id = e.optString("id")
-            if (id.length != 11 || id == v || id in have || id in haric || out.any { it.videoId == id }) continue
+            if (id.length != 11 || id == v || id in have || id in haric || id in sonOnerilenler() || out.any { it.videoId == id }) continue
             val (ad, sanatci) = ytAdSanatci(e.optString("title"), e.optString("channel").ifBlank { e.optString("uploader") })
             if (ad.isBlank()) continue
             out += Oneri(id, ad, sanatci)
         }
-        // Mix'in ilk sıraları çalana en yakın olanlar; onlardan rastgele seç
-        out.take(12).shuffled().take(adet)
+        // Mix'in tamamından rastgele seç: aynı şarkıdan başlasan da her seferinde farklı öneriler gelir
+        out.shuffled().take(adet).also { secilen -> oneriGecmisineEkle(secilen.map { it.videoId }) }
+    }
+
+    // ---- Öneri geçmişi: son 5 günde önerilen şarkılar tekrar önerilmez (uygulama kapansa da) ----
+    private val oneriGecmisi: MutableMap<String, Long> by lazy {
+        val m = LinkedHashMap<String, Long>()
+        runCatching {
+            val o = JSONObject(prefs.getString("oneri_gecmisi", "{}") ?: "{}")
+            o.keys().forEach { k -> m[k] = o.optLong(k) }
+        }
+        m
+    }
+
+    private fun sonOnerilenler(): Set<String> = synchronized(oneriGecmisi) {
+        val sinir = System.currentTimeMillis() - 5 * 86_400_000L
+        oneriGecmisi.filterValues { it > sinir }.keys.toSet()
+    }
+
+    private fun oneriGecmisineEkle(ids: List<String>) = synchronized(oneriGecmisi) {
+        val simdi = System.currentTimeMillis()
+        ids.forEach { oneriGecmisi[it] = simdi }
+        // En eski kayıtları at (en çok 600)
+        val fazla = oneriGecmisi.size - 600
+        if (fazla > 0) oneriGecmisi.entries.sortedBy { it.value }.take(fazla).forEach { oneriGecmisi.remove(it.key) }
+        prefs.edit().putString("oneri_gecmisi", JSONObject(oneriGecmisi as Map<*, *>).toString()).apply()
     }
 
     // ---------------- Akıllı karıştırma önbelleği ----------------
