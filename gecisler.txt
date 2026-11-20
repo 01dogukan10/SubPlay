@@ -1,0 +1,13 @@
+A'ya dokunuldu -> Sarki A
+mini Sonraki -> Sarki B
+büyük Sonraki -> Sarki C
+büyük Önceki (10 sn içinde, öncekine geçmeli) -> Sarki B
+büyük Önceki (12 sn sonra, başa sarmalı) -> Sarki B
+son şarkıya kadar -> Sarki A
+son şarkıda Sonraki (başa dönmeli) -> Sarki B
+medya tuşu NEXT -> Sarki C
+medya tuşu PREVIOUS -> Sarki B
+karışık Sonraki 1 -> Sarki A
+karışık Sonraki 2 -> Sarki D
+karışık Önceki -> Sarki A
+karışık medya NEXT -> Sarki D
