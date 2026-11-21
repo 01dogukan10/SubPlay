@@ -41,6 +41,15 @@ class MainActivity : ComponentActivity() {
             val tema by temaDeposu.ayar.collectAsStateWithLifecycle()
             SubPlayTema(tema) {
                 val vm: MainViewModel = viewModel()
+                // İzin ekranından dönünce yarım kalan güncellemeyi sürdür
+                val yasam = androidx.compose.ui.platform.LocalLifecycleOwner.current
+                androidx.compose.runtime.DisposableEffect(yasam) {
+                    val g = androidx.lifecycle.LifecycleEventObserver { _, e ->
+                        if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.geriDonuldu()
+                    }
+                    yasam.lifecycle.addObserver(g)
+                    onDispose { yasam.lifecycle.removeObserver(g) }
+                }
                 App(
                     vm = vm,
                     sekmeIstegi = sekme.value,

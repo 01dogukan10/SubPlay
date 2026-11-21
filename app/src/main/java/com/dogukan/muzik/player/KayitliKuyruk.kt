@@ -22,16 +22,19 @@ object KayitliKuyruk {
         val n = p.mediaItemCount
         if (n == 0) return
         val cur = p.currentMediaItemIndex.coerceIn(0, n - 1)
-        val ids = JSONArray(); val sira = JSONArray()
+        val ids = JSONArray(); val sira = JSONArray(); val onizleme = JSONObject()
         var idx = 0
         for (i in 0 until n) {
             val item = p.getMediaItemAt(i)
             if (i == cur) idx = ids.length()
             if (item.mediaId.startsWith("oneri:")) continue
             ids.put(item.mediaId); sira.put(MedyaOge.kuyrukta(item))
+            // Aramadan dinlenen şarkının adını da sakla (kütüphanede olmadığı için)
+            if (item.mediaId.startsWith("yt:")) onizleme.put(item.mediaId, JSONArray()
+                .put(item.mediaMetadata.title?.toString().orEmpty()).put(item.mediaMetadata.artist?.toString().orEmpty()))
         }
         if (ids.length() == 0) return
-        val json = JSONObject().put("ids", ids).put("kuyruk", sira).toString()
+        val json = JSONObject().put("ids", ids).put("kuyruk", sira).put("onizleme", onizleme).toString()
         if (json != sonYazilan) {
             liste(c).edit().putString("liste", json).apply()
             sonYazilan = json
@@ -52,6 +55,7 @@ object KayitliKuyruk {
     /** Kayıt yoksa null. Kütüphaneden kaldırılan şarkılar atlanır. */
     fun oku(c: Context, repo: MusicRepository): Kayit? {
         val raw = liste(c).getString("liste", null) ?: return null
+        val onz = runCatching { JSONObject(raw).optJSONObject("onizleme") }.getOrNull()
         val (ids, sira) = runCatching {
             val o = JSONObject(raw)
             val a = o.getJSONArray("ids"); val k = o.optJSONArray("kuyruk")
@@ -64,7 +68,8 @@ object KayitliKuyruk {
         // Şarkılar kütüphaneden, podcast bölümleri podcast kaydından; silinmiş olanlar atlanır
         val ogeler = ArrayList<androidx.media3.common.MediaItem>(); val kimlikler = ArrayList<String>()
         ids.forEachIndexed { i, id ->
-            val oge = if (MedyaOge.podcastMi(id)) pr.bolum(com.dogukan.muzik.data.PodcastRepo.idOf(id))?.let { MedyaOge.bolum(pr, it) }
+            val oge = if (id.startsWith("yt:")) onz?.optJSONArray(id)?.let { a -> MedyaOge.onizleme(id.removePrefix("yt:"), a.optString(0), a.optString(1)) }
+                else if (MedyaOge.podcastMi(id)) pr.bolum(com.dogukan.muzik.data.PodcastRepo.idOf(id))?.let { MedyaOge.bolum(pr, it) }
                 else byId[id]?.let { MedyaOge.of(repo, it, sira[i]) }
             if (oge != null) { ogeler += oge; kimlikler += id }
         }

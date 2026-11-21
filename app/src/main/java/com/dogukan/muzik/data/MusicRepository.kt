@@ -848,6 +848,8 @@ class MusicRepository private constructor(private val ctx: Context) {
                     .put("kutuphane", JSONArray(libFile.takeIf { it.exists() }?.readText() ?: "[]"))
                     .put("listeler", JSONArray(plFile.takeIf { it.exists() }?.readText() ?: "[]"))
                     .put("podcastlar", PodcastRepo.get(ctx).yedekJson())
+                    .put("sabit_listeler", JSONArray(_sabitler.value.toList()))
+                    .put("son_listeler", JSONArray(_sonListeler.value))
                 dir.findFile("yedek.json")?.delete()
                 val jf = dir.createFile("application/octet-stream", "yedek.json") ?: throw IOException("yedek.json yazılamadı")
                 ctx.contentResolver.openOutputStream(jf.uri)!!.use { it.write(json.toString().toByteArray()) }
@@ -881,6 +883,8 @@ class MusicRepository private constructor(private val ctx: Context) {
                 }
 
                 json.optJSONArray("podcastlar")?.let { PodcastRepo.get(ctx).yedektenYukle(it) }
+                json.optJSONArray("sabit_listeler")?.let { a -> (0 until a.length()).forEach { sabitle(a.getString(it), true) } }
+                json.optJSONArray("son_listeler")?.let { a -> (a.length() - 1 downTo 0).forEach { listeAcildi(a.getString(it)) } }
                 val lib = json.optJSONArray("kutuphane") ?: JSONArray()
                 val haveIds = _tracks.value.map { it.id }.toSet()
                 val added = mutableListOf<Track>()
@@ -920,9 +924,13 @@ class MusicRepository private constructor(private val ctx: Context) {
                         val idx = current.indexOfFirst { it.id == o.optString("id") }
                         if (idx >= 0) {
                             val p = current[idx]
-                            current[idx] = p.copy(trackIds = p.trackIds + ids.filterNot { it in p.trackIds }, cover = p.cover ?: cover)
+                            current[idx] = p.copy(trackIds = p.trackIds + ids.filterNot { it in p.trackIds }, cover = p.cover ?: cover,
+                                kaynak = p.kaynak ?: o.optString("kaynak").ifBlank { null })
                         } else {
-                            current += Playlist(o.optString("id"), o.optString("name"), ids, cover)
+                            // Eşitleme bağlantısı ve karışım bilgisi de geri gelsin
+                            current += Playlist(o.optString("id"), o.optString("name"), ids, cover,
+                                o.optString("kaynak").ifBlank { null },
+                                o.optJSONArray("karisim")?.let { k -> (0 until k.length()).map { k.getString(it) } })
                             plCount++
                         }
                     }
@@ -1011,7 +1019,7 @@ class MusicRepository private constructor(private val ctx: Context) {
             ?: t?.let { runCatching { aramaIdBul("${it.artist} ${it.title}".trim()) }.getOrNull() }
             ?: return@withContext emptyList()
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$v&list=RD$v").apply {
-            addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "25")
+            addOption("--flat-playlist"); addOption("-J"); addOption("--playlist-end", "50")
         }
         val json = runCatching {
             val o = YoutubeDL.getInstance().execute(req).out
@@ -1022,13 +1030,37 @@ class MusicRepository private constructor(private val ctx: Context) {
         for (i in 0 until entries.length()) {
             val e = entries.optJSONObject(i) ?: continue
             val id = e.optString("id")
-            if (id.length != 11 || id == v || id in have || id in haric || out.any { it.videoId == id }) continue
+            if (id.length != 11 || id == v || id in have || id in haric || id in sonOnerilenler() || out.any { it.videoId == id }) continue
             val (ad, sanatci) = ytAdSanatci(e.optString("title"), e.optString("channel").ifBlank { e.optString("uploader") })
             if (ad.isBlank()) continue
             out += Oneri(id, ad, sanatci)
         }
-        // Mix'in ilk sıraları çalana en yakın olanlar; onlardan rastgele seç
-        out.take(12).shuffled().take(adet)
+        // Mix'in tamamından rastgele seç: aynı şarkıdan başlasan da her seferinde farklı öneriler gelir
+        out.shuffled().take(adet).also { secilen -> oneriGecmisineEkle(secilen.map { it.videoId }) }
+    }
+
+    // ---- Öneri geçmişi: son 5 günde önerilen şarkılar tekrar önerilmez (uygulama kapansa da) ----
+    private val oneriGecmisi: MutableMap<String, Long> by lazy {
+        val m = LinkedHashMap<String, Long>()
+        runCatching {
+            val o = JSONObject(prefs.getString("oneri_gecmisi", "{}") ?: "{}")
+            o.keys().forEach { k -> m[k] = o.optLong(k) }
+        }
+        m
+    }
+
+    private fun sonOnerilenler(): Set<String> = synchronized(oneriGecmisi) {
+        val sinir = System.currentTimeMillis() - 5 * 86_400_000L
+        oneriGecmisi.filterValues { it > sinir }.keys.toSet()
+    }
+
+    private fun oneriGecmisineEkle(ids: List<String>) = synchronized(oneriGecmisi) {
+        val simdi = System.currentTimeMillis()
+        ids.forEach { oneriGecmisi[it] = simdi }
+        // En eski kayıtları at (en çok 600)
+        val fazla = oneriGecmisi.size - 600
+        if (fazla > 0) oneriGecmisi.entries.sortedBy { it.value }.take(fazla).forEach { oneriGecmisi.remove(it.key) }
+        prefs.edit().putString("oneri_gecmisi", JSONObject(oneriGecmisi as Map<*, *>).toString()).apply()
     }
 
     // ---------------- Akıllı karıştırma önbelleği ----------------
