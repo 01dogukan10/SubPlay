@@ -294,17 +294,18 @@ fun UyandirmaAyari(playlists: List<com.dogukan.muzik.data.Playlist>) {
     fun kaydet(y: com.dogukan.muzik.player.Uyandirma.Ayar) { a = y; com.dogukan.muzik.player.Uyandirma.kaydet(ctx, y) }
     var listeSec by remember { mutableStateOf(false) }
     val listeAdi = playlists.find { it.id == a.liste }?.name ?: "Tüm kütüphane"
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Müzikle uyan")
+    Column(Modifier.fillMaxWidth()) {
+        androidx.compose.material3.ListItem(
+            colors = transparentRow(),
+            modifier = Modifier.clickable { kaydet(a.copy(acik = !a.acik)) },
+            headlineContent = { Text("Müzikle uyan") },
+            supportingContent = {
                 Text(if (a.acik) "%02d:%02d · $listeAdi · ${if (a.herGun) "her gün" else "bir kez"}".format(a.saat, a.dakika)
-                    else "Seçtiğin listeyle çalan alarm; ses yavaşça açılır",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            androidx.compose.material3.Switch(checked = a.acik, onCheckedChange = { kaydet(a.copy(acik = it)) })
-        }
-        if (a.acik) {
+                    else "Seçtiğin listeyle çalan alarm; ses yavaşça açılır")
+            },
+            trailingContent = { androidx.compose.material3.Switch(checked = a.acik, onCheckedChange = { kaydet(a.copy(acik = it)) }) },
+        )
+        if (a.acik) Column(Modifier.padding(horizontal = 16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = {
                     android.app.TimePickerDialog(ctx, { _, s, d -> kaydet(a.copy(saat = s, dakika = d)) }, a.saat, a.dakika, true).show()
