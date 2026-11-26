@@ -1,0 +1,11 @@
+A dinlendi, B'ye geçildi -> Sarki B
+alarm 20:51 (şimdi 20:49:21)
+    RTC_WAKEUP #7: Alarm{8739967 type 0 origWhen 1795726260000 whenElapsed 331720 com.subplay.muzik}
+      tag=*walarm*:com.subplay.muzik.UYAN
+      type=RTC_WAKEUP origWhen=2026-11-26 20:51:00.000 window=0 exactAllowReason=policy_permission repeatInterval=0 count=0 flags=0x3
+      policyWhenElapsed: requester=+1m30s126ms app_standby=-7s393ms device_idle=-- battery_saver=-- tare=-7s393ms
+--
+        showIntent=PendingIntent{e9fe314: PendingIntentRecord{6bbf7bd com.subplay.muzik startActivity}}
+alarm sonrası çalan -> Sarki B
+      state=PlaybackState {state=PLAYING(3), position=82017, buffered position=120000, speed=1.0, updated=414385, actions=7340031, custom actions=[Action:mName='Beğen, mIcon=2131165273, mExtras=Bundle[EMPTY_PARCEL], Action:mName='Karışık kapat, mIcon=2131165275, mExtras=Bundle[EMPTY_PARCEL]], active item id=0, error=null}
+      state=PlaybackState {state=ERROR(7), position=0, buffered position=0, speed=0.0, updated=21053, actions=0, custom actions=[], active item id=-1, error=Bluetooth audio disconnected}

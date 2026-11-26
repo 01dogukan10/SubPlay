@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="uyan_hergun" value="true" />
+    <string name="yeni_cikanlar">[]</string>
+    <long name="son_esitleme" value="1795726032489" />
+    <long name="yeni_son_bakis" value="1795726101010" />
+    <set name="yeni_gorulen" />
+    <int name="uyan_dk" value="30" />
+    <int name="uyan_saat" value="7" />
+    <boolean name="uyan_acik" value="true" />
+</map>
