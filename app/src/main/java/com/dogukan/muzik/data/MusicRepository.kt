@@ -600,7 +600,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         val tmp = File(ctx.cacheDir, "yt_$taskId").apply { mkdirs() }
         try {
             val req = YoutubeDLRequest(source).apply {
-                addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                addOption("-f", indirmeBicimi())
                 addOption("--no-playlist")
                 addOption("--no-mtime")
                 addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
@@ -733,7 +733,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         if (src.startsWith("http") && !isYouTube(src)) return src // doğrudan dosya linki
         kotlinx.coroutines.runBlocking { ensureYt() }
         val req = YoutubeDLRequest(src).apply {
-            addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+            addOption("-f", akisBicimi())
             addOption("--no-playlist")
             addOption("--print", "%(id)s")
             addOption("--print", "urls")
@@ -1078,7 +1078,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         val tmp = File(oneriKlasoru, "_$vid").apply { deleteRecursively(); mkdirs() }
         try {
             val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$vid").apply {
-                addOption("-f", "bestaudio[ext=m4a]/bestaudio")
+                addOption("-f", akisBicimi())
                 addOption("--no-playlist"); addOption("--no-mtime")
                 addOption("-o", "${tmp.absolutePath}/ses.%(ext)s")
             }
@@ -1251,7 +1251,7 @@ class MusicRepository private constructor(private val ctx: Context) {
         streamCache[key]?.let { if (it.second > System.currentTimeMillis()) return it.first }
         kotlinx.coroutines.runBlocking { ensureYt() }
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=$videoId").apply {
-            addOption("-f", "bestaudio[ext=m4a]/bestaudio"); addOption("--no-playlist"); addOption("--print", "urls")
+            addOption("-f", akisBicimi()); addOption("--no-playlist"); addOption("--print", "urls")
         }
         val url = YoutubeDL.getInstance().execute(req).out.lines().map { it.trim() }.firstOrNull { it.startsWith("http") }
             ?: throw IOException("Akış adresi bulunamadı")
@@ -1942,6 +1942,7 @@ class MusicRepository private constructor(private val ctx: Context) {
     private val _sonListeler = MutableStateFlow(prefs.getString("son_listeler", "")!!.split(',').filter { it.isNotBlank() })
     val sonListeler = _sonListeler.asStateFlow()
     fun listeAcildi(id: String) {
+        if (ctx.getSharedPreferences("ayarlar", Context.MODE_PRIVATE).getBoolean("gizli", false)) return // gizli dinleme
         val l = (listOf(id) + (_sonListeler.value - id)).take(8)
         if (l == _sonListeler.value) return
         _sonListeler.value = l
@@ -2022,5 +2023,207 @@ class MusicRepository private constructor(private val ctx: Context) {
     /** Geçici dosyaları (kapak önbelleği, inmiş güncellemeler) temizle. Öneri önbelleği çalarken korunur. */
     suspend fun onbellegiTemizle() = withContext(Dispatchers.IO) {
         ctx.cacheDir.listFiles()?.forEach { if (it.name != "oneri") it.deleteRecursively() }
+    }
+
+    // ================= İndirme kalitesi =================
+    /** "dusuk", "normal", "yuksek" */
+    var kalite: String
+        get() = prefs.getString("kalite", "normal") ?: "normal"
+        set(v) { prefs.edit().putString("kalite", v).apply() }
+
+    /** Mobil veride internetten çalarken düşük kalite (veri tasarrufu). */
+    var mobildeDusuk: Boolean
+        get() = prefs.getBoolean("mobilde_dusuk", false)
+        set(v) { prefs.edit().putBoolean("mobilde_dusuk", v).apply() }
+
+    private fun bicim(k: String) = when (k) {
+        "dusuk" -> "bestaudio[ext=m4a][abr<=64]/worstaudio[acodec!=none]/bestaudio[ext=m4a]/bestaudio"
+        "yuksek" -> "bestaudio/bestaudio[ext=m4a]"
+        else -> "bestaudio[ext=m4a]/bestaudio"
+    }
+
+    private fun olcumlu(): Boolean = runCatching {
+        ctx.getSystemService(android.net.ConnectivityManager::class.java).isActiveNetworkMetered
+    }.getOrDefault(false)
+
+    fun indirmeBicimi() = bicim(kalite)
+    fun akisBicimi() = if (mobildeDusuk && olcumlu()) bicim("dusuk") else bicim(kalite)
+
+    // ================= Telefondaki müzikleri ekleme =================
+    /**
+     * Seçilen klasördeki (alt klasörler dahil) ses dosyalarını kütüphaneye kopyalar.
+     * Ad, sanatçı, albüm ve kapak dosyanın içinden okunur. Aynı ad + sanatçı varsa atlanır.
+     */
+    fun telefondanEkle(klasor: android.net.Uri) {
+        scope.launch(Dispatchers.IO) {
+            val kok = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, klasor) ?: return@launch
+            val dosyalar = ArrayList<androidx.documentfile.provider.DocumentFile>()
+            fun gez(d: androidx.documentfile.provider.DocumentFile, derinlik: Int) {
+                if (derinlik > 6) return
+                d.listFiles().forEach { f ->
+                    if (f.isDirectory) gez(f, derinlik + 1)
+                    else if ((f.type ?: "").startsWith("audio/") || f.name.orEmpty().substringAfterLast('.').lowercase() in
+                        setOf("mp3", "m4a", "aac", "flac", "ogg", "opus", "wav", "webm")) dosyalar += f
+                }
+            }
+            gez(kok, 0)
+            if (dosyalar.isEmpty()) { notice("Bu klasörde müzik dosyası bulunamadı"); return@launch }
+            notice("${dosyalar.size} dosya ekleniyor…")
+            var eklenen = 0
+            for (f in dosyalar) {
+                runCatching {
+                    val mmr = android.media.MediaMetadataRetriever()
+                    var ad = f.name.orEmpty().substringBeforeLast('.')
+                    var sanatci = ""; var album: String? = null; var resim: ByteArray? = null
+                    try {
+                        mmr.setDataSource(ctx, f.uri)
+                        mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)?.takeIf { it.isNotBlank() }?.let { ad = it }
+                        sanatci = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ARTIST).orEmpty()
+                        album = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_ALBUM)?.ifBlank { null }
+                        resim = mmr.embeddedPicture
+                    } finally { runCatching { mmr.release() } }
+                    if (sanatci.isBlank() && ad.contains(" - ")) { sanatci = ad.substringBefore(" - ").trim(); ad = ad.substringAfter(" - ").trim() }
+                    val var_ = _tracks.value.any { it.title.equals(ad, true) && it.artist.equals(sanatci, true) }
+                    if (var_) return@runCatching
+                    val uzanti = f.name.orEmpty().substringAfterLast('.', "mp3").lowercase()
+                    val hedef = uniqueFile(sanitize(ad).ifBlank { "sarki" }, uzanti)
+                    ctx.contentResolver.openInputStream(f.uri)?.use { i -> hedef.outputStream().use { o -> i.copyTo(o) } } ?: return@runCatching
+                    val id = UUID.randomUUID().toString()
+                    val kapak = resim?.let { b -> runCatching { File(coversDir, "$id.jpg").apply { writeBytes(b) }.name }.getOrNull() }
+                    synchronized(lock) {
+                        _tracks.value = listOf(Track(id, ad, sanatci, hedef.name, "", System.currentTimeMillis(), kapak, album = album)) + _tracks.value
+                        saveTracks()
+                    }
+                    eklenen++
+                }
+            }
+            sesOlcumuBaslat()
+            notice(if (eklenen == 0) "Yeni şarkı yok, hepsi zaten kütüphanede" else "$eklenen şarkı telefondan eklendi")
+        }
+    }
+
+    // ================= Zil sesi yapma =================
+    /**
+     * Şarkının [basMs, bitMs] bölümünü yeniden kodlamadan keser (m4a / webm) ve telefonun
+     * zil sesleri (ya da bildirim / alarm sesleri) arasına kaydeder. Oluşan sesin adresini döndürür.
+     */
+    suspend fun zilSesiYap(t: Track, basMs: Long, bitMs: Long, tur: String): android.net.Uri = withContext(Dispatchers.IO) {
+        val kaynak = fileOf(t).takeIf { t.indirildi && it.exists() } ?: throw IOException("Önce şarkıyı indirmelisin")
+        val ext = kaynak.extension.lowercase()
+        val webm = ext == "webm" || ext == "opus" || ext == "ogg"
+        val gecici = File(ctx.cacheDir, "zil.${if (webm) "webm" else "m4a"}").apply { delete() }
+        val ex = android.media.MediaExtractor()
+        ex.setDataSource(kaynak.absolutePath)
+        val iz = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(android.media.MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+            ?: throw IOException("Ses bulunamadı")
+        ex.selectTrack(iz)
+        val bicim = ex.getTrackFormat(iz)
+        val mux = android.media.MediaMuxer(gecici.absolutePath,
+            if (webm) android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM else android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val cikis = mux.addTrack(bicim)
+        mux.start()
+        ex.seekTo(basMs * 1000, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+        val buf = java.nio.ByteBuffer.allocate(1 shl 20)
+        val bilgi = android.media.MediaCodec.BufferInfo()
+        var ilk = -1L
+        while (true) {
+            val n = ex.readSampleData(buf, 0)
+            if (n < 0) break
+            val zaman = ex.sampleTime
+            if (zaman > bitMs * 1000) break
+            if (ilk < 0) ilk = zaman
+            bilgi.set(0, n, zaman - ilk, if (ex.sampleFlags and android.media.MediaExtractor.SAMPLE_FLAG_SYNC != 0) android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
+            mux.writeSampleData(cikis, buf, bilgi)
+            ex.advance()
+        }
+        runCatching { mux.stop() }; mux.release(); ex.release()
+        // Telefonun ses klasörüne kaydet (zil / bildirim / alarm listesinde görünür)
+        val klasor = when (tur) { "bildirim" -> android.os.Environment.DIRECTORY_NOTIFICATIONS; "alarm" -> android.os.Environment.DIRECTORY_ALARMS
+            else -> android.os.Environment.DIRECTORY_RINGTONES }
+        val ad = "${sanitize(t.title)} (SubPlay)"
+        val degerler = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Audio.Media.DISPLAY_NAME, "$ad.${gecici.extension}")
+            put(android.provider.MediaStore.Audio.Media.TITLE, ad)
+            put(android.provider.MediaStore.Audio.Media.MIME_TYPE, if (webm) "audio/webm" else "audio/mp4")
+            put(android.provider.MediaStore.Audio.Media.IS_RINGTONE, tur == "zil")
+            put(android.provider.MediaStore.Audio.Media.IS_NOTIFICATION, tur == "bildirim")
+            put(android.provider.MediaStore.Audio.Media.IS_ALARM, tur == "alarm")
+            put(android.provider.MediaStore.Audio.Media.IS_MUSIC, false)
+            if (android.os.Build.VERSION.SDK_INT >= 29) put(android.provider.MediaStore.Audio.Media.RELATIVE_PATH, klasor)
+        }
+        val uri = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            ctx.contentResolver.insert(android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, degerler)
+                ?: throw IOException("Kaydedilemedi")
+        } else throw IOException("Bu özellik Android 10 ve sonrasında çalışır")
+        ctx.contentResolver.openOutputStream(uri)?.use { o -> gecici.inputStream().use { it.copyTo(o) } }
+        gecici.delete()
+        uri
+    }
+
+    // ================= Yeni çıkanlar =================
+    data class YeniCikan(val anahtar: String, val ad: String, val sanatci: String, val kapak: String?, val tarih: Long, val album: String?)
+
+    private val _yeniCikanlar = MutableStateFlow(yeniCikanlariOku())
+    val yeniCikanlar = _yeniCikanlar.asStateFlow()
+
+    private fun yeniCikanlariOku(): List<YeniCikan> = runCatching {
+        val a = JSONArray(prefs.getString("yeni_cikanlar", "[]"))
+        (0 until a.length()).map { i -> a.getJSONObject(i).let {
+            YeniCikan(it.getString("k"), it.getString("ad"), it.getString("s"), it.optString("kapak").ifBlank { null },
+                it.getLong("t"), it.optString("al").ifBlank { null })
+        } }
+    }.getOrDefault(emptyList())
+
+    /** Kütüphanende en çok bulunan sanatçılar (en çok 40). */
+    private fun takipSanatcilari(): List<String> = _tracks.value.map { anaSanatci(it.artist).trim() }
+        .filter { it.isNotBlank() && !it.equals("Unknown", true) && !it.endsWith(" - Topic") }
+        .groupingBy { it.lowercase(java.util.Locale("tr")) }.eachCount().entries.sortedByDescending { it.value }.take(40)
+        .mapNotNull { e -> _tracks.value.firstOrNull { anaSanatci(it.artist).trim().lowercase(java.util.Locale("tr")) == e.key }?.let { anaSanatci(it.artist).trim() } }
+
+    /**
+     * Sanatçıların son 30 günde çıkan şarkılarını Apple Music kataloğundan bulur (ücretsiz, hızlı).
+     * Kütüphanende olanlar hariç. Yeni bulunanları döndürür (bildirim için).
+     */
+    suspend fun yeniCikanlariBul(): List<YeniCikan> = withContext(Dispatchers.IO) {
+        val sinir = System.currentTimeMillis() - 30 * 86_400_000L
+        val bicim = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US).apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+        fun nrm(x: String) = x.lowercase(java.util.Locale("tr")).replace(Regex("\\(.*?\\)|\\[.*?]"), "").filter { it.isLetterOrDigit() }
+        val kutuphane = _tracks.value.map { nrm(it.title) + "|" + nrm(anaSanatci(it.artist)) }.toHashSet()
+        val bulunan = ArrayList<YeniCikan>()
+        for (sanatci in takipSanatcilari()) {
+            runCatching {
+                val url = "https://itunes.apple.com/search?entity=song&limit=15&country=TR&term=" + java.net.URLEncoder.encode(sanatci, "UTF-8")
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply { connectTimeout = 10_000; readTimeout = 15_000 }
+                val js = try { JSONObject(conn.inputStream.bufferedReader().readText()) } finally { conn.disconnect() }
+                val a = js.optJSONArray("results") ?: return@runCatching
+                for (i in 0 until a.length()) {
+                    val o = a.optJSONObject(i) ?: continue
+                    if (!o.optString("artistName").contains(sanatci, ignoreCase = true)) continue
+                    val tarih = runCatching { bicim.parse(o.optString("releaseDate"))!!.time }.getOrDefault(0L)
+                    if (tarih < sinir || tarih > System.currentTimeMillis() + 86_400_000L) continue
+                    val ad = o.optString("trackName")
+                    if (ad.isBlank()) continue
+                    val k = nrm(ad) + "|" + nrm(sanatci)
+                    if (k in kutuphane || bulunan.any { it.anahtar == k }) continue
+                    bulunan += YeniCikan(k, ad, o.optString("artistName"), o.optString("artworkUrl100").replace("100x100", "300x300").ifBlank { null },
+                        tarih, o.optString("collectionName").ifBlank { null })
+                }
+            }
+            kotlinx.coroutines.delay(300) // servisi yormayalım
+        }
+        val eski = _yeniCikanlar.value.map { it.anahtar }.toSet()
+        val gorulen = prefs.getStringSet("yeni_gorulen", emptySet())!!
+        val liste = bulunan.sortedByDescending { it.tarih }.take(50)
+        _yeniCikanlar.value = liste
+        prefs.edit().putString("yeni_cikanlar", JSONArray().apply {
+            liste.forEach { put(JSONObject().put("k", it.anahtar).put("ad", it.ad).put("s", it.sanatci).put("kapak", it.kapak ?: "")
+                .put("t", it.tarih).put("al", it.album ?: "")) }
+        }.toString()).putStringSet("yeni_gorulen", gorulen + liste.map { it.anahtar }).apply()
+        liste.filter { it.anahtar !in eski && it.anahtar !in gorulen }
+    }
+
+    /** Yeni çıkan şarkının YouTube karşılığını bulur (dinlemek için). */
+    suspend fun yeniCikanVideo(y: YeniCikan): String? = withContext(Dispatchers.IO) {
+        ensureYt(); runCatching { aramaIdBul("${y.sanatci} ${y.ad}") }.getOrNull()
     }
 }

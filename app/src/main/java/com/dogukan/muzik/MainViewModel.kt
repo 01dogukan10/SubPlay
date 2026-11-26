@@ -145,6 +145,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     init {
         Guncelle.zamanla(app)
         com.dogukan.muzik.data.PodcastIsci.zamanla(app)
+        com.dogukan.muzik.data.YeniCikanIsci.zamanla(app)
+        com.dogukan.muzik.player.Uyandirma.zamanla(app)
         repo.esitleGerekirse()
         checkUpdate(manual = false)
         future.addListener({
@@ -304,6 +306,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (list.isEmpty()) return
         // Spotify gibi: kullanıcının sıraya eklediği şarkılar yeni liste çalınca da kaybolmaz
         val byId = repo.tracks.value.associateBy { it.id }
+        komut(SiraKomut.RADYO, Bundle().apply { putBoolean("acik", false) }) // yeni liste: radyo biter
         val keep = _sira.value.queued.mapNotNull { byId[it.trackId] }
         val podcasttan = MedyaOge.podcastMi(c.currentMediaItem?.mediaId)
         c.setMediaItems(list.map { it.toMediaItem() }, startIndex, 0L)
@@ -332,6 +335,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Bölümler sırayla çalar; müzikteki karışık ayarı saklanır, müziğe dönünce geri gelir
         if (!MedyaOge.podcastMi(c.currentMediaItem?.mediaId)) pod.prefs.edit().putBoolean("muzik_karisik", c.shuffleModeEnabled).apply()
         c.shuffleModeEnabled = false
+        komut(SiraKomut.RADYO, Bundle().apply { putBoolean("acik", false) })
         c.setMediaItems(l.map { MedyaOge.bolum(pod, it) }, idx, baslangic)
         c.prepare(); c.play()
         refresh()
@@ -418,6 +422,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteTracks(list: List<Track>) = list.forEach { deleteTrack(it) }
+
+    /** Şarkıdan radyo: o şarkıyla başlar, benzer şarkılar sen dinledikçe eklenir (indirilmez). */
+    fun radyoBaslat(t: Track) {
+        playTracks(listOf(t), 0, shuffle = false)
+        komut(SiraKomut.RADYO, Bundle().apply { putBoolean("acik", true) })
+        repo.notice("\"${t.title}\" radyosu başladı")
+    }
+
+    /** Yeni çıkan şarkıyı indirmeden dinle (YouTube'da bulunur). */
+    fun yeniCikanDinle(y: MusicRepository.YeniCikan) {
+        viewModelScope.launch {
+            val vid = repo.yeniCikanVideo(y)
+            if (vid == null) { repo.notice("Bu şarkı YouTube'da bulunamadı"); return@launch }
+            onizle(com.dogukan.muzik.data.SearchResult(vid, "${y.sanatci} - ${y.ad}", y.sanatci, 0, "https://www.youtube.com/watch?v=$vid"))
+        }
+    }
+
+    // Gizli dinleme
+    private val ayarlar = app.getSharedPreferences("ayarlar", android.content.Context.MODE_PRIVATE)
+    private val _gizli = MutableStateFlow(ayarlar.getBoolean("gizli", false))
+    val gizli = _gizli.asStateFlow()
+    fun gizliAyarla(on: Boolean) { ayarlar.edit().putBoolean("gizli", on).apply(); _gizli.value = on }
 
     /**
      * Arama sonucunu indirmeden hemen çal (önizleme). Çalan listeyi bozmaz: şarkı çalanın hemen

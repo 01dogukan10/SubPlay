@@ -54,6 +54,15 @@ değiştiği Releases sayfasında ve güncelleme penceresinde yazar.
 - **Önce dinle, sonra karar ver:** "+" ile şarkı aradığında sonuçlar artık kendiliğinden inmez. Sonuca dokununca şarkı internetten hemen çalar (telefona inmez, kütüphaneye eklenmez). Beğenirsen yanındaki ➕ ile kütüphaneye ekle ya da ⬇ ile indir. Aynı düğmeler büyük oynatıcıda da "Önizleme" yazısının yanında durur.
 - **Her seferinde farklı karışık:** karışık çalmada son zamanlarda dinlediklerin sıranın sonlarına gider; akıllı karıştırma son 5 günde önerdiği şarkıları tekrar önermez.
 - **Kolay güncelleme:** güncellemeleri uygulama kendisi kurar; Android 12 ve sonrasında bir kez böyle kurulduktan sonraki güncellemeler izin sormadan kurulur.
+- **Şarkıdan radyo:** bir şarkının ⋮ menüsünden "Bu şarkıdan radyo başlat". O şarkıya benzeyenler sen dinledikçe eklenir, hiç bitmez.
+- **Müzikle uyan:** Ayarlar → Oynatma ve indirme. Saati ve listeyi seç; alarm çalınca liste karışık başlar, ses 45 saniyede yavaşça açılır.
+- **Gizli dinleme:** açıkken dinlediklerin istatistiklere, son çalınanlara ve önerilere girmez.
+- **Cihaza göre ekolayzır:** her kulaklık, hoparlör ve araba için ekolayzır ayarı ayrı saklanır; cihaz bağlanınca onun ayarı gelir.
+- **Yeni çıkanlar:** kütüphanendeki sanatçıların son 30 günde çıkan şarkıları Listeler sayfasında görünür, yeni çıkınca bildirim gelir. Dokununca indirmeden dinlersin.
+- **Yıllık özet:** İstatistikler → "Yıllık özet": yılın en çok dinlediğin şarkıları ve sanatçıları, paylaşılabilir görsel olarak.
+- **Telefondaki müzikler:** "+" → "Telefondaki müziklerden ekle" ile bir klasör seç; içindeki şarkılar adı, sanatçısı ve kapağıyla kütüphaneye eklenir.
+- **İndirme kalitesi:** Ayarlar'dan düşük / normal / yüksek; mobil veride internetten çalınanlar için düşük kalite seçeneği.
+- **Zil sesi yap:** indirilmiş bir şarkının ⋮ menüsünden istediğin bölümü (en çok 40 sn) seçip zil, bildirim ya da alarm sesi yap.
 - **Kaydırma hareketleri:** küçük oynatıcıyı sola kaydır → sonraki şarkı, sağa → önceki, yukarı → büyük oynatıcı. Büyük oynatıcıda kapağı sola / sağa kaydırarak da şarkı değiştirebilirsin.
 - **Bluetooth bağlanınca çal:** Ayarlar → Oynatma ve indirme'den açılır. Kulaklık, hoparlör ya da araba bağlanınca kaldığın yerden çalar.
 - **Uygulama simgesi kısayolları:** simgeye basılı tut: "Kaldığın yerden devam", "Karışık çal", "Beğendiklerim".

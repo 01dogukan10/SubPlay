@@ -126,7 +126,7 @@ private fun SmartRow(t: Track, cover: File?, playing: Boolean, onClick: () -> Un
 
 /** Dinleme istatistikleri: toplam süre, en çok dinlenen şarkılar ve sanatçılar, günlük grafik. */
 @Composable
-fun StatsScreen(lib: List<Track>, coverOf: (Track) -> File?, surum: Int, onBack: () -> Unit) {
+fun StatsScreen(lib: List<Track>, coverOf: (Track) -> File?, surum: Int, onYillik: () -> Unit = {}, onBack: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val donemler = listOf(7 to "Son 7 gün", 30 to "Son 30 gün", 365 to "Son 1 yıl", 0 to "Tüm zamanlar")
@@ -137,7 +137,9 @@ fun StatsScreen(lib: List<Track>, coverOf: (Track) -> File?, surum: Int, onBack:
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
-                Text("İstatistikler", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text("İstatistikler", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f))
+                androidx.compose.material3.FilledTonalButton(onClick = onYillik, modifier = Modifier.padding(end = 8.dp)) { Text("Yıllık özet") }
             }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),

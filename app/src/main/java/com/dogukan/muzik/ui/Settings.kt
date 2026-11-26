@@ -89,6 +89,9 @@ fun SettingsScreen(
     onAdDuzelt: () -> Unit,
     onDepolama: () -> Unit = {},
     onCiftler: () -> Unit = {},
+    listeler: List<com.dogukan.muzik.data.Playlist> = emptyList(),
+    gizli: Boolean = false,
+    onGizli: (Boolean) -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
@@ -219,6 +222,39 @@ fun SettingsScreen(
                 supportingContent = { Text("Mobil verideyken indirmeler bekler, Wi-Fi gelince devam eder") },
                 trailingContent = { Switch(checked = wifi, onCheckedChange = { wifi = it; onSadeceWifi(it) }) },
             )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { onGizli(!gizli) },
+                headlineContent = { Text("Gizli dinleme") },
+                supportingContent = { Text("Açıkken dinlediklerin istatistiklere, son çalınanlara ve önerilere girmez") },
+                trailingContent = { Switch(checked = gizli, onCheckedChange = onGizli) },
+            )
+            // İndirme kalitesi
+            val repoK = remember { com.dogukan.muzik.data.MusicRepository.get(ctx) }
+            var kalite by remember { mutableStateOf(repoK.kalite) }
+            var mobil by remember { mutableStateOf(repoK.mobildeDusuk) }
+            ListItem(
+                colors = transparentRow(),
+                headlineContent = { Text("İndirme kalitesi") },
+                supportingContent = {
+                    Column {
+                        Text("Yüksek daha iyi ses, daha çok yer kaplar")
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
+                            listOf("dusuk" to "Düşük", "normal" to "Normal", "yuksek" to "Yüksek").forEach { (k, ad) ->
+                                androidx.compose.material3.FilterChip(selected = kalite == k, onClick = { kalite = k; repoK.kalite = k }, label = { Text(ad) })
+                            }
+                        }
+                    }
+                },
+            )
+            ListItem(
+                colors = transparentRow(),
+                modifier = Modifier.clickable { mobil = !mobil; repoK.mobildeDusuk = mobil },
+                headlineContent = { Text("Mobil veride düşük kalite") },
+                supportingContent = { Text("İnternetten çalınan şarkılar mobil veride daha az veri harcar") },
+                trailingContent = { Switch(checked = mobil, onCheckedChange = { mobil = it; repoK.mobildeDusuk = it }) },
+            )
+            UyandirmaAyari(listeler)
             // Bluetooth bağlanınca otomatik çal
             var bt by remember { mutableStateOf(com.dogukan.muzik.player.BluetoothAlici.acik(ctx) && com.dogukan.muzik.player.BluetoothAlici.izinVar(ctx)) }
             val btIzin = androidx.activity.compose.rememberLauncherForActivityResult(

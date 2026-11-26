@@ -1,5 +1,6 @@
 package com.dogukan.muzik.ui
 
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.automirrored.filled.CallMerge
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.LibraryAddCheck
@@ -232,6 +233,13 @@ fun App(
     var showDepolama by rememberSaveable { mutableStateOf(false) }
     var showCiftler by remember { mutableStateOf(false) }
     var karisimDuzenle by remember { mutableStateOf<Playlist?>(null) }
+    var zilIcin by remember { mutableStateOf<Track?>(null) }
+    var yillikOzet by remember { mutableStateOf(false) }
+    val gizli by vm.gizli.collectAsStateWithLifecycle()
+    // Telefondaki müzik klasörünü seç
+    val klasorSec = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri -> if (uri != null) vm.repo.telefondanEkle(uri) }
     val sabitler by vm.repo.sabitler.collectAsStateWithLifecycle()
     val podcastlar by vm.pod.podcastlar.collectAsStateWithLifecycle()
     val bolumler by vm.pod.bolumler.collectAsStateWithLifecycle()
@@ -241,6 +249,7 @@ fun App(
     // Bildirimden "yeni podcast bölümü" ile açıldıysa Podcast sekmesine geç
     LaunchedEffect(sekmeIstegi) {
         if (sekmeIstegi == "podcast") { tab = 2; showPlayer = false; onSekmeAcildi() }
+        if (sekmeIstegi == "listeler") { tab = 1; openPlaylistId = null; openSmart = null; showPlayer = false; onSekmeAcildi() }
     }
     LaunchedEffect(sharedUrl) {
         if (sharedUrl != null) {
@@ -292,6 +301,8 @@ fun App(
         } else {
             DropdownMenuItem(text = { Text("Telefondan sil") }, onClick = { close(); confirmFileDelete = listOf(t) })
         }
+        DropdownMenuItem(text = { Text("Bu şarkıdan radyo başlat") }, onClick = { close(); vm.radyoBaslat(t) })
+        if (t.indirildi) DropdownMenuItem(text = { Text("Zil sesi yap") }, onClick = { close(); zilIcin = t })
         DropdownMenuItem(text = { Text("Kütüphaneden kaldır") }, onClick = { close(); kutuphanedenKaldir(listOf(t)) })
     }
 
@@ -418,7 +429,7 @@ fun App(
                         onKarisimDuzenle = { karisimDuzenle = openPl },
                         onKarisimiSabitle = { vm.repo.karisimiNormaleCevir(openPl.id); toast("Artık normal liste; elle düzenleyebilirsin") },
                     )
-                    tab == 1 && openSmart == "istatistik" -> StatsScreen(tracks, coverOf, istatistikSurum) { openSmart = null }
+                    tab == 1 && openSmart == "istatistik" -> StatsScreen(tracks, coverOf, istatistikSurum, onYillik = { yillikOzet = true }) { openSmart = null }
                     tab == 1 && openSmart != null -> {
                         val ist = com.dogukan.muzik.data.Istatistik.get(ctx)
                         val (baslik, aciklama, liste) = remember(openSmart, tracks, istatistikSurum) {
@@ -446,6 +457,7 @@ fun App(
                         sonListeler = sonListeler,
                         sabitler = sabitler,
                         onSabitle = { p, on -> vm.repo.sabitle(p.id, on) },
+                        yeniCikanlar = { YeniCikanlarSirasi(vm.repo) { vm.yeniCikanDinle(it) } },
                         onKarisim = { ad, ids ->
                             val id = vm.repo.karisimOlustur(ad, ids)
                             openPlaylistId = id
@@ -478,6 +490,9 @@ fun App(
                         onEkolayzir = { showEq = true },
                         onDepolama = { showDepolama = true },
                         onCiftler = { showCiftler = true },
+                        listeler = playlists,
+                        gizli = gizli,
+                        onGizli = vm::gizliAyarla,
                         onAdDuzelt = {
                             val l = vm.repo.adDuzeltmeleri()
                             if (l.isEmpty()) toast("Düzeltilecek şarkı adı yok") else adDuzeltmeler = l
@@ -544,6 +559,8 @@ fun App(
                 onClose = { showDepolama = false }, toast = toast)
         }
         if (showCiftler) CiftlerDiyalogu(vm.repo, onClose = { showCiftler = false }, toast = toast)
+        zilIcin?.let { ZilSesiDiyalogu(it, vm.repo) { zilIcin = null } }
+        if (yillikOzet) YillikOzetDiyalogu(tracks) { yillikOzet = false }
         karisimDuzenle?.let { p ->
             KarisimDiyalogu(playlists.filter { it.karisim == null }, p.karisim.orEmpty().toSet(), ilkAd = p.name,
                 baslik = "Karışımı düzenle", onayYazi = "Kaydet",
@@ -570,6 +587,7 @@ fun App(
                 toast(if (indir) "İndirme başladı" else "Kütüphaneye eklendi")
             },
             onPreview = { vm.onizle(it) },
+            onTelefondan = { showAdd = false; toast("Müziklerinin olduğu klasörü seç"); klasorSec.launch(null) },
             calanId = player.currentId,
             calarken = player.isPlaying,
             indir = indirAyari,
@@ -1186,6 +1204,7 @@ private fun PlaylistsScreen(
     sabitler: Set<String> = emptySet(),
     onSabitle: (Playlist, Boolean) -> Unit = { _, _ -> },
     onKarisim: (String, List<String>) -> Unit = { _, _ -> },
+    yeniCikanlar: @Composable () -> Unit = {},
 ) {
     var showNew by remember { mutableStateOf(false) }
     var karisimIcin by remember { mutableStateOf<Set<String>?>(null) } // açıksa önceden seçili listeler
@@ -1226,6 +1245,7 @@ private fun PlaylistsScreen(
                     }
                 }
             }
+            item(key = "yeni-cikanlar") { yeniCikanlar() }
             val sonAcilan = sonListeler.mapNotNull { id -> playlists.find { it.id == id } }
             if (sonAcilan.isNotEmpty()) item {
                 Text("Son açtığın listeler", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
@@ -1812,6 +1832,7 @@ private fun AddDialog(
     indir: Boolean,
     onIndir: (Boolean) -> Unit,
     onPreview: (SearchResult) -> Unit = {},
+    onTelefondan: () -> Unit = {},
     calanId: String? = null,
     calarken: Boolean = false,
 ) {
@@ -1874,6 +1895,10 @@ private fun AddDialog(
                     TextButton(onClick = onBulk) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null); Spacer(Modifier.width(6.dp))
                         Text("Elimde liste var, toplu ekle")
+                    }
+                    TextButton(onClick = onTelefondan) {
+                        Icon(Icons.Default.PhoneAndroid, null); Spacer(Modifier.width(6.dp))
+                        Text("Telefondaki müziklerden ekle")
                     }
                 }
                 if (searching) LinearProgressIndicator(Modifier.fillMaxWidth())

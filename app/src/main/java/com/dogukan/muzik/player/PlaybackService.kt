@@ -55,7 +55,9 @@ object SiraKomut {
     const val ONERI_DOLDUR = "oneri.doldur"  // akıllı karıştırma: çalana göre yeni öneri getir
     const val BILDIRIM_BEGEN = "bildirim.begen"       // bildirim / kilit ekranı ♥
     const val BILDIRIM_KARISIK = "bildirim.karisik"   // bildirim / kilit ekranı karıştır
-    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE, ONERI_DOLDUR, BILDIRIM_BEGEN, BILDIRIM_KARISIK)
+    const val RADYO = "radyo"                         // bool "acik": şarkıdan radyo
+
+    val HEPSI = listOf(EKLE, CIKAR, TASI, TEMIZLE, YENI_KUYRUK, UYKU, ONERI_EKLE, ONERI_TEMIZLE, ONERI_DOLDUR, BILDIRIM_BEGEN, BILDIRIM_KARISIK, RADYO)
 }
 
 /** Şarkıdan oynatıcı öğesi üretir. kuyruk=true -> kullanıcının "sıraya ekle" dediği şarkı. */
@@ -149,6 +151,26 @@ object MedyaOge {
 /** Arka planda çalmayı, bildirim kontrollerini ve çalma sırasını yöneten servis. */
 @androidx.annotation.OptIn(markerClass = [UnstableApi::class])
 class PlaybackService : MediaLibraryService() {
+    companion object {
+        /** Çalışan servis (müzikle uyanma alarmı doğrudan buna iletir). */
+        @Volatile var ornek: PlaybackService? = null
+    }
+
+    /** Müzikle uyanma: listeyi karışık başlat, ses 45 sn'de yavaşça açılsın. */
+    fun uyandir(liste: String?) = main.post {
+        val repo = MusicRepository.get(this)
+        val byId = repo.tracks.value.associateBy { it.id }
+        val sarkilar = repo.playlists.value.find { it.id == liste }?.trackIds?.mapNotNull { byId[it] }
+            ?.takeIf { it.isNotEmpty() } ?: repo.tracks.value
+        if (sarkilar.isEmpty()) return@post
+        uyanmaBas = System.currentTimeMillis()
+        player.volume = 0.05f
+        player.setMediaItems(sarkilar.shuffled().map { MedyaOge.of(repo, it) }, 0, 0L)
+        player.shuffleModeEnabled = true
+        karistir()
+        player.prepare(); player.play()
+    }
+
 
     private var session: MediaLibrarySession? = null
     private lateinit var prefs: SharedPreferences
@@ -162,7 +184,8 @@ class PlaybackService : MediaLibraryService() {
     private val prefDinleyici = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when {
             key == null -> Unit
-            key.startsWith("eq_") || key == "bass" -> efektleriUygula()
+            key.startsWith("eq_profil") || key.startsWith("eq_cihaz") -> Unit
+            key.startsWith("eq_") || key == "bass" -> { efektleriUygula(); EqProfil.kaydet(prefs) }
             key == "normalize" -> if (::player.isInitialized) normHesapla(player.currentMediaItem)
         }
     }
@@ -182,6 +205,8 @@ class PlaybackService : MediaLibraryService() {
     private var dinlenenMs = 0L
 
     private val TICK = 250L
+    private var radyo = false        // şarkıdan radyo: öneriler hiç bitmez
+    private var uyanmaBas = 0L       // müzikle uyanma: ses 45 sn'de açılır
     private var kayitSayac = 0
     private var ogeVardi = false
 
@@ -225,12 +250,18 @@ class PlaybackService : MediaLibraryService() {
                 player.pause(); uykuBitis = 0
             } else if (kalan < 10_000) v = minOf(v, kalan / 10_000f) // son 10 saniyede sesi yavaşça kıs
         }
+        if (uyanmaBas > 0) {
+            val gecen = System.currentTimeMillis() - uyanmaBas
+            if (gecen >= 45_000) uyanmaBas = 0 else v = minOf(v, 0.05f + 0.95f * gecen / 45_000f)
+        }
         v = (v * normCarpan).coerceIn(0f, 1f)
         if (kotlin.math.abs(player.volume - v) > 0.01f) player.volume = v
     }
 
     private fun dinlemeyiKaydet() {
         val id = dinlenenId ?: return
+        // Gizli dinleme: istatistiklere, son çalınanlara ve önerilere girmez
+        if (getSharedPreferences("ayarlar", MODE_PRIVATE).getBoolean("gizli", false)) { dinlenenId = null; dinlenenMs = 0; return }
         Istatistik.get(this).kaydet(id, dinlemeBas, dinlenenMs)
         dinlenenId = null; dinlenenMs = 0
     }
@@ -402,6 +433,17 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    // ---------------- Cihaza göre ekolayzır ----------------
+    private val cihazDinleyici = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(d: Array<out android.media.AudioDeviceInfo>?) { main.postDelayed({ cihazDegisti() }, 800) }
+        override fun onAudioDevicesRemoved(d: Array<out android.media.AudioDeviceInfo>?) { main.postDelayed({ cihazDegisti() }, 800) }
+    }
+
+    private fun cihazDegisti() {
+        val (anahtar, ad) = EqProfil.simdikiCihaz(this)
+        EqProfil.cihazaGec(prefs, anahtar, ad)
+    }
+
     // ---------------- Bildirim düğmeleri (♥ ve karıştır) ----------------
     private fun dugmeler(): com.google.common.collect.ImmutableList<androidx.media3.session.CommandButton> {
         val id = player.currentMediaItem?.mediaId
@@ -432,12 +474,13 @@ class PlaybackService : MediaLibraryService() {
     private var sonUyari = 0L
 
     private fun akilliDoldur(zorla: Boolean = false) {
-        if (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled || player.mediaItemCount == 0) return
+        val akilliAcik = prefs.getBoolean("akilli", false) && player.shuffleModeEnabled
+        if ((!akilliAcik && !radyo) || player.mediaItemCount == 0) return
         if (MedyaOge.podcastMi(player.currentMediaItem?.mediaId)) return
         if (oneriIsi?.isActive == true) return
         val yakin = sonrakiler(true).take(10)
         val oneriSayisi = yakin.count { player.getMediaItemAt(it).mediaId.startsWith("oneri:") }
-        if (!zorla && oneriSayisi >= 2) return
+        if (!zorla && oneriSayisi >= (if (radyo) 3 else 2)) return
         val cur = player.currentMediaItem ?: return
         val repo = MusicRepository.get(this)
         // Öneriler çoğunlukla çalan şarkıya göre; arada bir listedeki başka bir şarkıya göre (çeşitlilik)
@@ -453,8 +496,8 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         oneriIsi = isScope.launch {
-            val list = runCatching { repo.oneriCalandan(vid, track, 3, haric) }.getOrElse { emptyList() }
-            if (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled) return@launch
+            val list = runCatching { repo.oneriCalandan(vid, track, if (radyo) 5 else 3, haric) }.getOrElse { emptyList() }
+            if (!radyo && (!prefs.getBoolean("akilli", false) || !player.shuffleModeEnabled)) return@launch
             if (list.isEmpty()) {
                 // Uyarıyı sık sık gösterme
                 if (zorla && System.currentTimeMillis() - sonUyari > 60_000) {
@@ -477,6 +520,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        ornek = this
         // İndirilmemiş şarkılar: "subplay://akis/<id>" adresi çalınacağı an gerçek internet adresine çevrilir
         val repo = MusicRepository.get(this)
         repo.oneriOnbellegiTemizle() // önceki oturumdan kalan öneri önbelleği
@@ -674,6 +718,18 @@ class PlaybackService : MediaLibraryService() {
                     controller: MediaSession.ControllerInfo,
                 ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
                     val repo = MusicRepository.get(this@PlaybackService)
+                    // Müzikle uyanma: alarm çaldıysa seçilen listeyi karışık başlat, ses yavaşça açılsın
+                    Uyandirma.bekleyenListe(this@PlaybackService)?.let { liste ->
+                        val byId = repo.tracks.value.associateBy { it.id }
+                        val sarkilar = repo.playlists.value.find { it.id == liste }?.trackIds?.mapNotNull { byId[it] }
+                            ?.takeIf { it.isNotEmpty() } ?: repo.tracks.value
+                        if (sarkilar.isNotEmpty()) {
+                            uyanmaBas = System.currentTimeMillis()
+                            main.post { player.shuffleModeEnabled = true; karistir() }
+                            val l = sarkilar.shuffled()
+                            return Futures.immediateFuture(MediaSession.MediaItemsWithStartPosition(l.map { MedyaOge.of(repo, it) }, 0, 0L))
+                        }
+                    }
                     // Kayıtlı liste, şarkı ve saniyeden devam et
                     KayitliKuyruk.oku(this@PlaybackService, repo)?.let { k ->
                         main.post { if (player.shuffleModeEnabled) karistir() }
@@ -751,6 +807,10 @@ class PlaybackService : MediaLibraryService() {
                         }
                         SiraKomut.ONERI_TEMIZLE -> { oneriTemizle(); oneriIsi?.cancel(); oneriIsi = null }
                         SiraKomut.ONERI_DOLDUR -> akilliDoldur(zorla = true)
+                        SiraKomut.RADYO -> {
+                            radyo = args.getBoolean("acik")
+                            if (radyo) akilliDoldur(zorla = true)
+                        }
                         SiraKomut.BILDIRIM_BEGEN -> player.currentMediaItem?.let { m ->
                             MusicRepository.get(this@PlaybackService).begen(m.mediaId,
                                 m.mediaMetadata.title?.toString().orEmpty(), m.mediaMetadata.artist?.toString().orEmpty())
@@ -775,6 +835,9 @@ class PlaybackService : MediaLibraryService() {
             putBoolean(androidx.media3.session.MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_NEXT, true)
             putBoolean(androidx.media3.session.MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_PREV, true)
         })
+        // Cihaza göre ekolayzır: kulaklık / hoparlör / araba değişince o cihazın ayarı gelsin
+        getSystemService(android.media.AudioManager::class.java)?.registerAudioDeviceCallback(cihazDinleyici, main)
+        main.postDelayed({ cihazDegisti() }, 500)
         dugmeleriGuncelle()
         // Beğeni başka yerden değişince (uygulama) bildirimdeki ♥ da güncellensin
         isScope.launch { repo.playlists.collect { dugmeleriGuncelle() } }
@@ -874,11 +937,13 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        ornek = null
         main.removeCallbacks(tick)
         runCatching { isScope.cancel() }
         runCatching { MusicRepository.get(this).oneriOnbellegiTemizle() }
         if (::player.isInitialized) { KayitliKuyruk.kaydet(this, player); podcastKonumu(hemen = true) }
         runCatching { prefs.unregisterOnSharedPreferenceChangeListener(prefDinleyici) }
+        runCatching { getSystemService(android.media.AudioManager::class.java)?.unregisterAudioDeviceCallback(cihazDinleyici) }
         runCatching { eq?.release() }; runCatching { bass?.release() }; runCatching { loud?.release() }
         dinlemeyiKaydet()
         session?.run { player.release(); release() }

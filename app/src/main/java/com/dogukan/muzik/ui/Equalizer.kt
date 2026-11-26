@@ -102,6 +102,12 @@ fun EqualizerScreen(onClose: () -> Unit) {
                         modifier = Modifier.weight(1f))
                     Switch(checked = acik, onCheckedChange = { acik = it; kaydet() }, modifier = Modifier.padding(end = 12.dp))
                 }
+                // Cihaza göre ekolayzır: bu ayar hangi cihaz için
+                prefs.getString("eq_cihaz_ad", null)?.let { ad ->
+                    Text("Bu ayar \"$ad\" için kaydediliyor. Başka kulaklık, hoparlör ya da araba bağlayınca onun ayarı gelir.",
+                        style = MaterialTheme.typography.bodySmall, color = c.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                }
                 if (bilgi == null) {
                     Text("Bu telefon ekolayzırı desteklemiyor.", color = c.onSurfaceVariant, modifier = Modifier.padding(24.dp))
                     return@Column
