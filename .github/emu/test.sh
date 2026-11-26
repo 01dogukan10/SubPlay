@@ -57,10 +57,10 @@ for ad, f in [("A",440),("B",550),("C",660),("D",770)]:
 PY
 for ad in A B C D; do adb push /tmp/ses/$ad.wav /sdcard/Android/data/$PKG/files/Music/$ad.wav >/dev/null && echo "itildi $ad"; done
 cat > /tmp/ses/library.json <<'JS'
-[{"id":"t1","title":"Sarki A","artist":"Sanatci 1","fileName":"A.wav","sourceUrl":"","addedAt":4},
- {"id":"t2","title":"Sarki B","artist":"Sanatci 2","fileName":"B.wav","sourceUrl":"","addedAt":3},
- {"id":"t3","title":"Sarki C","artist":"Sanatci 3","fileName":"C.wav","sourceUrl":"","addedAt":2},
- {"id":"t4","title":"Sarki D","artist":"Sanatci 4","fileName":"D.wav","sourceUrl":"","addedAt":1}]
+[{"id":"t1","title":"Sarki A","artist":"Taylor Swift","fileName":"A.wav","sourceUrl":"","addedAt":4},
+ {"id":"t2","title":"Sarki B","artist":"Tarkan","fileName":"B.wav","sourceUrl":"","addedAt":3},
+ {"id":"t3","title":"Sarki C","artist":"Drake","fileName":"C.wav","sourceUrl":"","addedAt":2},
+ {"id":"t4","title":"Sarki D","artist":"Billie Eilish","fileName":"D.wav","sourceUrl":"","addedAt":1}]
 JS
 adb push /tmp/ses/library.json /data/local/tmp/library.json >/dev/null
 adb shell "run-as $PKG cp /data/local/tmp/library.json files/library.json" && echo "kütüphane yazıldı"
@@ -68,29 +68,26 @@ calan() { adb shell dumpsys media_session | grep -m1 -o "description=[^,]*" | se
 kayit() { echo "$1 -> $(calan)" | tee -a $OUT/gecisler.txt; }
 
 adb shell am start -n $PKG/$ACT; bekle 8; sistemPenceresi; foto kutuphane
-bas "Sarki A"; bekle 4; kayit "A'ya dokunuldu"
-# Mini oynatıcıdaki Sonraki
-bas "Sonraki" son; bekle 3; kayit "mini Sonraki"
-# Büyük oynatıcı
-bas "Sarki" son; bekle 4; foto tam_oynatici
-bas "Sonraki"; bekle 3; kayit "büyük Sonraki"
-bas "Önceki"; bekle 1; kayit "büyük Önceki (10 sn içinde, öncekine geçmeli)"
-bekle 12; bas "Önceki"; bekle 1; kayit "büyük Önceki (12 sn sonra, başa sarmalı)"
-bas "Sonraki"; bekle 1; bas "Sonraki"; bekle 1; bas "Sonraki"; bekle 2; kayit "son şarkıya kadar"
-bas "Sonraki"; bekle 2; kayit "son şarkıda Sonraki (başa dönmeli)"
-adb shell input keyevent KEYCODE_MEDIA_NEXT; bekle 3; kayit "medya tuşu NEXT"
-adb shell input keyevent KEYCODE_MEDIA_PREVIOUS; bekle 3; kayit "medya tuşu PREVIOUS"
-# Karışık açıkken
-bas "Karışık kapalı"; bekle 2; foto karisik_acik
-bas "Sonraki"; bekle 3; kayit "karışık Sonraki 1"
-bas "Sonraki"; bekle 3; kayit "karışık Sonraki 2"
-bas "Önceki"; bekle 3; kayit "karışık Önceki"
-adb shell input keyevent KEYCODE_MEDIA_NEXT; bekle 3; kayit "karışık medya NEXT"
+# 35 sn çal, sonraki: istatistiğe girsin
+bas "Sarki A"; bekle 36; bas "Sonraki" son; bekle 3; kayit "A dinlendi, B'ye geçildi"
+# Listeler: yeni çıkanlar + son çalınanlar
+bas "Listeler"; bekle 20; foto listeler_yeni_cikanlar
+# İstatistik -> yıllık özet
+bas "İstatistikler"; bekle 3; bas "Yıllık özet"; bekle 3; foto yillik_ozet
+bas "Kapat"; bekle 1; adb shell input keyevent KEYCODE_BACK; bekle 2
+# Ayarlar: gizli dinleme, kalite, müzikle uyan
+bas "Ayarlar"; bekle 2
+for k in 1 2 3; do adb shell input swipe 540 1700 540 700 400; bekle 1; done
+foto ayarlar_oynatma
+bas "Müzikle uyan"; bekle 2; foto muzikle_uyan
+for k in 1 2; do adb shell input swipe 540 1700 540 900 400; bekle 1; done
+bas "Ekolayzır"; bekle 3; foto ekolayzir
 adb shell input keyevent KEYCODE_BACK; bekle 2
-# Bildirim
-adb shell cmd statusbar expand-notifications; bekle 3; foto bildirim
-dok; cp $OUT/ui_son.xml $OUT/bildirim_ui.xml
-adb shell dumpsys media_session > $OUT/media_session.txt
+adb shell "run-as $PKG cat shared_prefs/ayarlar.xml" > $OUT/ayarlar.xml 2>&1
+# Alarmı uygulama kapalıyken tetikle
+adb shell am force-stop $PKG; bekle 3
+adb shell am broadcast -n $PKG/com.dogukan.muzik.player.UyandirmaAlici -a com.subplay.muzik.UYAN; bekle 10; kayit "alarm (uygulama kapalıyken)"
+adb shell dumpsys media_session | grep -m2 -E "state=PlaybackState" >> $OUT/gecisler.txt
 kill $LOGPID 2>/dev/null
 grep -E "AndroidRuntime|FATAL|$PKG|SubPlay|yt-dlp|youtubedl" $OUT/logcat.txt | tail -400 > $OUT/logcat_ozet.txt
 exit 0
