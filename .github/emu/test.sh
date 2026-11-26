@@ -84,9 +84,25 @@ for k in 1 2; do adb shell input swipe 540 1700 540 900 400; bekle 1; done
 bas "Ekolayzır"; bekle 3; foto ekolayzir
 adb shell input keyevent KEYCODE_BACK; bekle 2
 adb shell "run-as $PKG cat shared_prefs/ayarlar.xml" > $OUT/ayarlar.xml 2>&1
-# Alarmı uygulama kapalıyken tetikle
-adb shell am force-stop $PKG; bekle 3
-adb shell am broadcast -n $PKG/com.dogukan.muzik.player.UyandirmaAlici -a com.subplay.muzik.UYAN; bekle 10; kayit "alarm (uygulama kapalıyken)"
+# Gerçek alarm: 2 dakika sonrasına kur, uygulamayı arka planda öldür, alarm çalsın
+adb shell am force-stop $PKG; bekle 2
+SAAT=$(adb shell date -d "@\$(( \$(date +%s) + 150 ))" +%H 2>/dev/null | tr -d '\r'); DK=$(adb shell date -d "@\$(( \$(date +%s) + 150 ))" +%M 2>/dev/null | tr -d '\r')
+echo "alarm $SAAT:$DK (şimdi $(adb shell date +%H:%M:%S | tr -d '\r'))" | tee -a $OUT/gecisler.txt
+adb shell "run-as $PKG cat shared_prefs/ayarlar.xml" > /tmp/ay.xml
+python3 - "$SAAT" "$DK" <<'PY'
+import re,sys
+x=open('/tmp/ay.xml').read()
+x=re.sub(r'<int name="uyan_saat" value="\d+" />', f'<int name="uyan_saat" value="{int(sys.argv[1])}" />', x)
+x=re.sub(r'<int name="uyan_dk" value="\d+" />', f'<int name="uyan_dk" value="{int(sys.argv[2])}" />', x)
+open('/tmp/ay.xml','w').write(x)
+PY
+adb push /tmp/ay.xml /data/local/tmp/ay.xml >/dev/null
+adb shell "run-as $PKG cp /data/local/tmp/ay.xml shared_prefs/ayarlar.xml"
+adb shell am start -n $PKG/$ACT; bekle 8
+adb shell dumpsys alarm | grep -A2 "com.subplay.muzik" | head -6 >> $OUT/gecisler.txt
+adb shell input keyevent KEYCODE_HOME; bekle 3
+adb shell am kill $PKG; bekle 2
+bekle 170; kayit "alarm sonrası çalan"
 adb shell dumpsys media_session | grep -m2 -E "state=PlaybackState" >> $OUT/gecisler.txt
 kill $LOGPID 2>/dev/null
 grep -E "AndroidRuntime|FATAL|$PKG|SubPlay|yt-dlp|youtubedl" $OUT/logcat.txt | tail -400 > $OUT/logcat_ozet.txt
